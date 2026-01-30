@@ -12,6 +12,9 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 
+#[cfg(target_arch = "wasm32")]
+mod webrtc;
+
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct Vertex {
@@ -303,14 +306,20 @@ impl GpuState {
                 let dx = (x - last_x) as f32;
                 let dy = (y - last_y) as f32;
                 
-                self.rotation_y += dx * 0.01;
-                self.rotation_x += dy * 0.01;
+                self.apply_rotation(dx * 0.01, dy * 0.01);
                 
-                self.rotation_x = self.rotation_x.clamp(-1.5, 1.5);
+                #[cfg(target_arch = "wasm32")]
+                webrtc::send_rotation_to_peer(dx * 0.01, dy * 0.01);
             }
             self.last_mouse_pos = Some((x, y));
             self.window.request_redraw();
         }
+    }
+    
+    fn apply_rotation(&mut self, dy: f32, dx: f32) {
+        self.rotation_y += dy;
+        self.rotation_x += dx;
+        self.rotation_x = self.rotation_x.clamp(-1.5, 1.5);
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -443,6 +452,17 @@ impl ApplicationHandler for App {
                     *s.borrow_mut() = Some(state);
                 });
                 window_clone.request_redraw();
+                
+                // Initialize WebRTC client
+                webrtc::init_webrtc_client();
+                webrtc::set_rotation_callback(|dx, dy| {
+                    GPU_STATE.with(|s| {
+                        if let Some(state) = s.borrow_mut().as_mut() {
+                            state.apply_rotation(dx, dy);
+                            state.window.request_redraw();
+                        }
+                    });
+                });
             });
         }
 
