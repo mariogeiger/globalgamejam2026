@@ -1,0 +1,20 @@
+[package]
+name = "globalgamejam2026"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "*"
+winit = "*"
+pollster = "*"
+env_logger = "*"
+log = "*"
+bytemuck = { version = "*", features = ["derive"] }
+glam = "*"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "*"
+console_log = "*"
+wasm-bindgen = "*"
+wasm-bindgen-futures = "*"
+web-sys = { version = "*", features = ["Document", "Window", "Element", "HtmlCanvasElement"] }
