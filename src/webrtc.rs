@@ -9,7 +9,7 @@ use web_sys::{
 };
 use serde::{Deserialize, Serialize};
 
-const SIGNALING_SERVER: &str = "ws://192.168.0.16:9000";
+const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RotationMessage {
