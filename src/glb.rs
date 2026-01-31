@@ -1,9 +1,36 @@
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use glam::Vec3;
 use gltf::image::Format;
 
 use crate::map::{MapVertex, MapMesh, TextureData, LoadedMap};
+
+pub const SPAWNS_TEAM_A: &[[f32; 3]] = &[
+    [-8.0, -10.0, 4.0],
+    [-10.0, -10.0, 4.0],
+    [-14.0, -10.0, 4.0],
+    [-16.0, -10.0, 4.0],
+    [-18.0, -10.0, 4.0],
+    [-8.0, -12.0, 4.0],
+    [-10.0, -12.0, 4.0],
+    [-14.0, -12.0, 4.0],
+    [-16.0, -12.0, 4.0],
+    [-18.0, -12.0, 4.0],
+];
+
+pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
+    [5.5, 32.0, 0.0],
+    [3.5, 32.0, 0.0],
+    [5.5, 30.0, 0.0],
+    [3.5, 30.0, 0.0],
+    [0.5, 29.0, 0.0],
+    [-1.5, 29.0, 0.0],
+    [7.5, 29.0, 0.0],
+    [9.5, 29.0, 1.0],
+    [11.5, 29.0, 2.0],
+    [13.5, 29.0, 2.0],
+];
 
 /// Load GLB from file path (native only)
 #[cfg(not(target_arch = "wasm32"))]
@@ -83,11 +110,11 @@ fn load_glb_data(
                 .zip(tex_coords.iter())
                 .zip(normals.iter())
                 .map(|((pos, tex), norm)| {
-                    // Flip Y axis to correct upside-down map
+                    // Flip Y axis (upside-down fix) and X axis (mirror fix)
                     MapVertex {
-                        position: [pos[0], -pos[1], pos[2]],
+                        position: [-pos[0], -pos[1], pos[2]],
                         tex_coord: *tex,
-                        normal: [norm[0], -norm[1], norm[2]],
+                        normal: [-norm[0], -norm[1], norm[2]],
                     }
                 })
                 .collect();
@@ -109,9 +136,9 @@ fn load_glb_data(
                 texture_name,
             });
             
-            // Add to collision geometry (with Y flip)
+            // Add to collision geometry (with Y and X flip)
             let base_idx = collision_vertices.len() as u32;
-            collision_vertices.extend(positions.iter().map(|p| Vec3::new(p[0], -p[1], p[2])));
+            collision_vertices.extend(positions.iter().map(|p| Vec3::new(-p[0], -p[1], p[2])));
             
             for chunk in indices.chunks(3) {
                 if chunk.len() == 3 {
@@ -125,20 +152,25 @@ fn load_glb_data(
         }
     }
     
-    // Calculate bounding box to find a good spawn point
+    // Calculate map bounds for debugging
     let mut min_bounds = Vec3::splat(f32::MAX);
     let mut max_bounds = Vec3::splat(f32::MIN);
-    
     for v in &collision_vertices {
         min_bounds = min_bounds.min(*v);
         max_bounds = max_bounds.max(*v);
     }
-    
     log::info!("Map bounds: min={:?}, max={:?}", min_bounds, max_bounds);
     
-    // Spawn in the center of the map, slightly above
-    let center = (min_bounds + max_bounds) / 2.0;
-    let spawn_point = Vec3::new(center.x, max_bounds.y + 50.0, center.z);
+    // Use first spawn from team A
+    // spawn.json: [x, forward, height] at 1/64 scale of GLB units
+    // We flip X and Y in the loader
+    const SPAWN_SCALE: f32 = 64.0;
+    let spawn = SPAWNS_TEAM_A[0];
+    let spawn_point = Vec3::new(
+        -spawn[0] * SPAWN_SCALE,  // Flip X to match mirrored map
+        spawn[2] * SPAWN_SCALE,
+        spawn[1] * SPAWN_SCALE,
+    );
     
     log::info!("Loaded GLB: {} meshes, {} textures, {} collision triangles",
         meshes.len(), textures.len(), collision_indices.len());

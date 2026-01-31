@@ -466,9 +466,13 @@ impl GpuState {
         // Apply physics collision
         if let Some(physics) = &mut self.physics {
             let desired_pos = self.player.position;
-            let (new_pos, on_ground) = physics.move_player(desired_pos);
+            let velocity_y = self.player.velocity.y;
+            let (new_pos, on_ground, hit_ceiling) = physics.move_player(desired_pos, velocity_y);
             self.player.position = new_pos;
             self.player.set_on_ground(on_ground, None);
+            if hit_ceiling {
+                self.player.velocity.y = 0.0; // Stop upward movement on ceiling hit
+            }
         }
     }
 
