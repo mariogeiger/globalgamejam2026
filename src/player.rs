@@ -56,8 +56,12 @@ impl Player {
         }
     }
 
-    pub fn handle_key_press(&mut self, key: KeyCode) { self.pressed_keys.insert(key); }
-    pub fn handle_key_release(&mut self, key: KeyCode) { self.pressed_keys.remove(&key); }
+    pub fn handle_key_press(&mut self, key: KeyCode) {
+        self.pressed_keys.insert(key);
+    }
+    pub fn handle_key_release(&mut self, key: KeyCode) {
+        self.pressed_keys.remove(&key);
+    }
     pub fn handle_mouse_move(&mut self, dx: f32, dy: f32) {
         self.mouse_delta.0 += dx;
         self.mouse_delta.1 += dy;
@@ -74,10 +78,18 @@ impl Player {
         let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize();
 
         let mut move_dir = Vec3::ZERO;
-        if self.pressed_keys.contains(&KeyCode::KeyW) { move_dir += forward; }
-        if self.pressed_keys.contains(&KeyCode::KeyS) { move_dir -= forward; }
-        if self.pressed_keys.contains(&KeyCode::KeyD) { move_dir += right; }
-        if self.pressed_keys.contains(&KeyCode::KeyA) { move_dir -= right; }
+        if self.pressed_keys.contains(&KeyCode::KeyW) {
+            move_dir += forward;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyS) {
+            move_dir -= forward;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyD) {
+            move_dir += right;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyA) {
+            move_dir -= right;
+        }
 
         if move_dir.length_squared() > 0.0 {
             move_dir = move_dir.normalize();
@@ -114,7 +126,8 @@ impl Player {
             self.yaw.sin() * self.pitch.cos(),
             self.pitch.sin(),
             -self.yaw.cos() * self.pitch.cos(),
-        ).normalize();
+        )
+        .normalize();
         Mat4::look_at_rh(eye, eye + look_dir, Vec3::Y)
     }
 
@@ -124,7 +137,9 @@ impl Player {
         }
         self.on_ground = on_ground;
         if let Some(y) = ground_y {
-            if self.on_ground { self.position.y = y; }
+            if self.on_ground {
+                self.position.y = y;
+            }
         }
     }
 
@@ -148,7 +163,11 @@ impl RemotePlayer {
     pub fn new(team: Team) -> Self {
         let spawn = team.spawn_points()[0];
         Self {
-            position: Vec3::new(-spawn[0] * SPAWN_SCALE, spawn[2] * SPAWN_SCALE, spawn[1] * SPAWN_SCALE),
+            position: Vec3::new(
+                -spawn[0] * SPAWN_SCALE,
+                spawn[2] * SPAWN_SCALE,
+                spawn[1] * SPAWN_SCALE,
+            ),
             yaw: 0.0,
             team,
         }
@@ -172,7 +191,13 @@ pub struct PlayerStateMessage {
 
 impl PlayerStateMessage {
     pub fn new(position: Vec3, yaw: f32) -> Self {
-        Self { msg_type: "player_state".to_string(), x: position.x, y: position.y, z: position.z, yaw }
+        Self {
+            msg_type: "player_state".to_string(),
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            yaw,
+        }
     }
 }
 
@@ -191,7 +216,11 @@ impl PlayerVertex {
             array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
@@ -213,12 +242,35 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
     let (hw, hd, h) = (PLAYER_WIDTH / 2.0, PLAYER_WIDTH / 2.0, PLAYER_HEIGHT);
 
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([0.0, 0.0, 1.0], [[-hw, 0.0, hd], [hw, 0.0, hd], [hw, h, hd], [-hw, h, hd]]),      // Front
-        ([0.0, 0.0, -1.0], [[hw, 0.0, -hd], [-hw, 0.0, -hd], [-hw, h, -hd], [hw, h, -hd]]), // Back
-        ([-1.0, 0.0, 0.0], [[-hw, 0.0, -hd], [-hw, 0.0, hd], [-hw, h, hd], [-hw, h, -hd]]), // Left
-        ([1.0, 0.0, 0.0], [[hw, 0.0, hd], [hw, 0.0, -hd], [hw, h, -hd], [hw, h, hd]]),      // Right
-        ([0.0, 1.0, 0.0], [[-hw, h, hd], [hw, h, hd], [hw, h, -hd], [-hw, h, -hd]]),        // Top
-        ([0.0, -1.0, 0.0], [[-hw, 0.0, -hd], [hw, 0.0, -hd], [hw, 0.0, hd], [-hw, 0.0, hd]]), // Bottom
+        (
+            [0.0, 0.0, 1.0],
+            [[-hw, 0.0, hd], [hw, 0.0, hd], [hw, h, hd], [-hw, h, hd]],
+        ), // Front
+        (
+            [0.0, 0.0, -1.0],
+            [[hw, 0.0, -hd], [-hw, 0.0, -hd], [-hw, h, -hd], [hw, h, -hd]],
+        ), // Back
+        (
+            [-1.0, 0.0, 0.0],
+            [[-hw, 0.0, -hd], [-hw, 0.0, hd], [-hw, h, hd], [-hw, h, -hd]],
+        ), // Left
+        (
+            [1.0, 0.0, 0.0],
+            [[hw, 0.0, hd], [hw, 0.0, -hd], [hw, h, -hd], [hw, h, hd]],
+        ), // Right
+        (
+            [0.0, 1.0, 0.0],
+            [[-hw, h, hd], [hw, h, hd], [hw, h, -hd], [-hw, h, -hd]],
+        ), // Top
+        (
+            [0.0, -1.0, 0.0],
+            [
+                [-hw, 0.0, -hd],
+                [hw, 0.0, -hd],
+                [hw, 0.0, hd],
+                [-hw, 0.0, hd],
+            ],
+        ), // Bottom
     ];
 
     let mut vertices = Vec::with_capacity(24);
@@ -227,7 +279,10 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
     for (normal, positions) in faces {
         let base = vertices.len() as u32;
         for pos in positions {
-            vertices.push(PlayerVertex { position: pos, normal });
+            vertices.push(PlayerVertex {
+                position: pos,
+                normal,
+            });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }

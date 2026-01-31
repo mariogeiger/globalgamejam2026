@@ -1,34 +1,36 @@
+use bytemuck::{Pod, Zeroable};
+use glam::{Mat4, Vec3};
+use rand::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use web_time::Instant;
-use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
-use rand::prelude::*;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, WindowEvent, DeviceEvent},
+    event::{DeviceEvent, ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
 
+mod collision;
 mod config;
+mod glb;
 mod gpu;
 mod map;
-mod glb;
 mod player;
-mod collision;
 mod webrtc;
 
-use config::RESPAWN_MARGIN;
-use gpu::{create_depth_texture, create_texture_with_bind_group, create_placeholder_bind_group,
-         create_vertex_buffer, create_index_buffer, create_uniform_buffer,
-         texture_bind_group_layout, camera_bind_group_layout, uniform_bind_group_layout};
-use map::{MapVertex, LoadedMap};
-use glb::load_glb_from_bytes;
-use player::{Player, PlayerVertex, PlayerUniform, RemotePlayer, Team, generate_player_box};
 use collision::PhysicsWorld;
+use config::RESPAWN_MARGIN;
+use glb::load_glb_from_bytes;
+use gpu::{
+    camera_bind_group_layout, create_depth_texture, create_index_buffer,
+    create_placeholder_bind_group, create_texture_with_bind_group, create_uniform_buffer,
+    create_vertex_buffer, texture_bind_group_layout, uniform_bind_group_layout,
+};
+use map::{LoadedMap, MapVertex};
+use player::{generate_player_box, Player, PlayerUniform, PlayerVertex, RemotePlayer, Team};
 
 const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
 
@@ -107,7 +109,9 @@ impl GpuState {
             .expect("Failed to create device");
 
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps
+            .formats
+            .iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
@@ -131,8 +135,11 @@ impl GpuState {
             source: wgpu::ShaderSource::Wgsl(include_str!("map.wgsl").into()),
         });
 
-        let camera_uniform = CameraUniform { view_proj: Mat4::IDENTITY.to_cols_array_2d() };
-        let camera_uniform_buffer = create_uniform_buffer(&device, &camera_uniform, "Camera Uniform");
+        let camera_uniform = CameraUniform {
+            view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+        };
+        let camera_uniform_buffer =
+            create_uniform_buffer(&device, &camera_uniform, "Camera Uniform");
 
         let camera_layout = camera_bind_group_layout(&device);
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -198,35 +205,62 @@ impl GpuState {
             ..Default::default()
         });
 
-        let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) = loaded_map {
+        let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) =
+            loaded_map
+        {
             let mut gpu_textures: HashMap<String, wgpu::BindGroup> = HashMap::new();
 
             for (name, tex_data) in &loaded_map.textures {
                 let (_, _, bg) = create_texture_with_bind_group(
-                    &device, &queue, &texture_layout, &sampler,
-                    &tex_data.rgba, tex_data.width, tex_data.height, name,
+                    &device,
+                    &queue,
+                    &texture_layout,
+                    &sampler,
+                    &tex_data.rgba,
+                    tex_data.width,
+                    tex_data.height,
+                    name,
                 );
                 gpu_textures.insert(name.clone(), bg);
             }
 
-            let placeholder = create_placeholder_bind_group(&device, &queue, &texture_layout, &sampler);
+            let placeholder =
+                create_placeholder_bind_group(&device, &queue, &texture_layout, &sampler);
 
-            let map_meshes: Vec<_> = loaded_map.meshes.iter()
+            let map_meshes: Vec<_> = loaded_map
+                .meshes
+                .iter()
                 .filter(|m| !m.vertices.is_empty() && !m.indices.is_empty())
                 .map(|mesh| MapRenderData {
-                    vertex_buffer: create_vertex_buffer(&device, &mesh.vertices, &mesh.texture_name),
+                    vertex_buffer: create_vertex_buffer(
+                        &device,
+                        &mesh.vertices,
+                        &mesh.texture_name,
+                    ),
                     index_buffer: create_index_buffer(&device, &mesh.indices, &mesh.texture_name),
                     index_count: mesh.indices.len() as u32,
-                    bind_group: gpu_textures.get(&mesh.texture_name).cloned().unwrap_or_else(|| placeholder.clone()),
+                    bind_group: gpu_textures
+                        .get(&mesh.texture_name)
+                        .cloned()
+                        .unwrap_or_else(|| placeholder.clone()),
                 })
                 .collect();
 
             let spawn_idx = rand::thread_rng().gen_range(0..loaded_map.spawn_points.len());
             let initial_spawn = loaded_map.spawn_points[spawn_idx];
             let player = Player::new(initial_spawn);
-            let physics = PhysicsWorld::new(&loaded_map.collision_vertices, &loaded_map.collision_indices);
+            let physics = PhysicsWorld::new(
+                &loaded_map.collision_vertices,
+                &loaded_map.collision_indices,
+            );
 
-            (map_meshes, player, physics, loaded_map.spawn_points, Some((loaded_map.bounds_min, loaded_map.bounds_max)))
+            (
+                map_meshes,
+                player,
+                physics,
+                loaded_map.spawn_points,
+                Some((loaded_map.bounds_min, loaded_map.bounds_max)),
+            )
         } else {
             let spawn = vec![Vec3::new(0.0, 100.0, 0.0)];
             (Vec::new(), Player::new(spawn[0]), None, spawn, None)
@@ -239,11 +273,12 @@ impl GpuState {
             });
 
             let player_uniform_layout = uniform_bind_group_layout(&device, "Player Uniform Layout");
-            let player_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Player Pipeline Layout"),
-                bind_group_layouts: &[&camera_layout, &player_uniform_layout],
-                immediate_size: 0,
-            });
+            let player_pipeline_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Player Pipeline Layout"),
+                    bind_group_layouts: &[&camera_layout, &player_uniform_layout],
+                    immediate_size: 0,
+                });
 
             let player_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Player Render Pipeline"),
@@ -282,7 +317,10 @@ impl GpuState {
             });
 
             let (vertices, indices) = generate_player_box();
-            let uniform = PlayerUniform { model: Mat4::IDENTITY.to_cols_array_2d(), color: [1.0, 0.0, 0.0, 1.0] };
+            let uniform = PlayerUniform {
+                model: Mat4::IDENTITY.to_cols_array_2d(),
+                color: [1.0, 0.0, 0.0, 1.0],
+            };
 
             Some(PlayerRenderData {
                 vertex_buffer: create_vertex_buffer(&device, &vertices, "Player Vertex"),
@@ -295,17 +333,33 @@ impl GpuState {
                     layout: &player_uniform_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: create_uniform_buffer(&device, &uniform, "Player Uniform").as_entire_binding(),
+                        resource: create_uniform_buffer(&device, &uniform, "Player Uniform")
+                            .as_entire_binding(),
                     }],
                 }),
             })
         };
 
         Self {
-            window, surface, device, queue, config, depth_view, render_pipeline,
-            camera_uniform_buffer, camera_bind_group, map_meshes, player, physics,
-            last_frame_time: Instant::now(), cursor_grabbed: false, spawn_points,
-            map_bounds, local_team: None, remote_player: None, player_render,
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            depth_view,
+            render_pipeline,
+            camera_uniform_buffer,
+            camera_bind_group,
+            map_meshes,
+            player,
+            physics,
+            last_frame_time: Instant::now(),
+            cursor_grabbed: false,
+            spawn_points,
+            map_bounds,
+            local_team: None,
+            remote_player: None,
+            player_render,
         }
     }
 
@@ -314,7 +368,8 @@ impl GpuState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            let (_, depth_view) = create_depth_texture(&self.device, new_size.width, new_size.height);
+            let (_, depth_view) =
+                create_depth_texture(&self.device, new_size.width, new_size.height);
             self.depth_view = depth_view;
         }
     }
@@ -327,17 +382,23 @@ impl GpuState {
         self.player.update(dt);
 
         if let Some(ref physics) = self.physics {
-            let (new_pos, on_ground, hit_ceiling) = physics.move_player(self.player.position, self.player.velocity.y);
+            let (new_pos, on_ground, hit_ceiling) =
+                physics.move_player(self.player.position, self.player.velocity.y);
             self.player.position = new_pos;
             self.player.set_on_ground(on_ground, None);
-            if hit_ceiling { self.player.velocity.y = 0.0; }
+            if hit_ceiling {
+                self.player.velocity.y = 0.0;
+            }
         }
 
         if let Some((bounds_min, bounds_max)) = self.map_bounds {
             let pos = self.player.position;
-            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN || pos.x > bounds_max.x + RESPAWN_MARGIN
-                || pos.y < bounds_min.y - RESPAWN_MARGIN || pos.y > bounds_max.y + RESPAWN_MARGIN
-                || pos.z < bounds_min.z - RESPAWN_MARGIN || pos.z > bounds_max.z + RESPAWN_MARGIN;
+            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
+                || pos.x > bounds_max.x + RESPAWN_MARGIN
+                || pos.y < bounds_min.y - RESPAWN_MARGIN
+                || pos.y > bounds_max.y + RESPAWN_MARGIN
+                || pos.z < bounds_min.z - RESPAWN_MARGIN
+                || pos.z > bounds_max.z + RESPAWN_MARGIN;
 
             if outside && !self.spawn_points.is_empty() {
                 log::info!("Player fell out of map, respawning");
@@ -357,15 +418,27 @@ impl GpuState {
         self.update();
 
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let view_proj = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0) * self.player.view_matrix();
+        let view_proj = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0)
+            * self.player.view_matrix();
 
-        self.queue.write_buffer(&self.camera_uniform_buffer, 0,
-            bytemuck::cast_slice(&[CameraUniform { view_proj: view_proj.to_cols_array_2d() }]));
+        self.queue.write_buffer(
+            &self.camera_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[CameraUniform {
+                view_proj: view_proj.to_cols_array_2d(),
+            }]),
+        );
 
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -374,14 +447,22 @@ impl GpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.5, g: 0.7, b: 0.9, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.5,
+                            g: 0.7,
+                            b: 0.9,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -400,8 +481,12 @@ impl GpuState {
             }
 
             if let (Some(remote), Some(pr)) = (&self.remote_player, &self.player_render) {
-                let uniform = PlayerUniform { model: remote.model_matrix().to_cols_array_2d(), color: remote.team.color() };
-                self.queue.write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
+                let uniform = PlayerUniform {
+                    model: remote.model_matrix().to_cols_array_2d(),
+                    color: remote.team.color(),
+                };
+                self.queue
+                    .write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
 
                 pass.set_pipeline(&pr.pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -427,17 +512,30 @@ impl App {
     fn new() -> Self {
         let loaded_map = load_glb_from_bytes(EMBEDDED_MAP).ok();
         if let Some(ref map) = loaded_map {
-            log::info!("Loaded GLB: {} meshes, {} textures", map.meshes.len(), map.textures.len());
+            log::info!(
+                "Loaded GLB: {} meshes, {} textures",
+                map.meshes.len(),
+                map.textures.len()
+            );
         }
-        Self { gpu_state: None, loaded_map }
+        Self {
+            gpu_state: None,
+            loaded_map,
+        }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu_state.is_some() { return; }
+        if self.gpu_state.is_some() {
+            return;
+        }
 
-        let window = Arc::new(event_loop.create_window(Window::default_attributes().with_title("CS 1.6 Map Viewer")).unwrap());
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes().with_title("CS 1.6 Map Viewer"))
+                .unwrap(),
+        );
 
         use winit::platform::web::WindowExtWebSys;
         let canvas = window.canvas().expect("No canvas");
@@ -450,11 +548,17 @@ impl ApplicationHandler for App {
         );
         canvas.set_width(w);
         canvas.set_height(h);
-        canvas.style().set_css_text("width: 100%; height: 100%; display: block;");
+        canvas
+            .style()
+            .set_css_text("width: 100%; height: 100%; display: block;");
 
         web_sys::window()
             .and_then(|win| win.document())
-            .and_then(|doc| doc.get_element_by_id("wasm-container")?.append_child(&canvas).ok())
+            .and_then(|doc| {
+                doc.get_element_by_id("wasm-container")?
+                    .append_child(&canvas)
+                    .ok()
+            })
             .expect("Couldn't append canvas");
 
         let loaded_map = self.loaded_map.take();
@@ -471,7 +575,9 @@ impl ApplicationHandler for App {
             GPU_STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
                     if state.cursor_grabbed {
-                        state.player.handle_mouse_move(delta.0 as f32, delta.1 as f32);
+                        state
+                            .player
+                            .handle_mouse_move(delta.0 as f32, delta.1 as f32);
                         state.window.request_redraw();
                     }
                 }
@@ -483,7 +589,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                GPU_STATE.with(|s| { if let Some(state) = s.borrow_mut().as_mut() { state.resize(size); } });
+                GPU_STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        state.resize(size);
+                    }
+                });
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
@@ -491,7 +601,9 @@ impl ApplicationHandler for App {
                         if let Some(state) = s.borrow_mut().as_mut() {
                             match event.state {
                                 ElementState::Pressed if key == KeyCode::Escape => {
-                                    web_sys::window().and_then(|w| w.document()).map(|d| d.exit_pointer_lock());
+                                    web_sys::window()
+                                        .and_then(|w| w.document())
+                                        .map(|d| d.exit_pointer_lock());
                                     state.cursor_grabbed = false;
                                 }
                                 ElementState::Pressed => state.player.handle_key_press(key),
@@ -502,14 +614,22 @@ impl ApplicationHandler for App {
                     });
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
                 web_sys::window()
                     .and_then(|w| w.document())
                     .and_then(|d| d.get_element_by_id("wasm-container"))
                     .and_then(|c| c.first_element_child())
                     .map(|canvas| {
                         canvas.request_pointer_lock();
-                        GPU_STATE.with(|s| { if let Some(state) = s.borrow_mut().as_mut() { state.cursor_grabbed = true; } });
+                        GPU_STATE.with(|s| {
+                            if let Some(state) = s.borrow_mut().as_mut() {
+                                state.cursor_grabbed = true;
+                            }
+                        });
                     });
             }
             WindowEvent::RedrawRequested => {
@@ -517,7 +637,12 @@ impl ApplicationHandler for App {
                     if let Some(state) = s.borrow_mut().as_mut() {
                         match state.render() {
                             Ok(_) => state.window.request_redraw(),
-                            Err(wgpu::SurfaceError::Lost) => state.resize(winit::dpi::PhysicalSize::new(state.config.width, state.config.height)),
+                            Err(wgpu::SurfaceError::Lost) => {
+                                state.resize(winit::dpi::PhysicalSize::new(
+                                    state.config.width,
+                                    state.config.height,
+                                ))
+                            }
                             Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                             Err(e) => log::error!("Render error: {:?}", e),
                         }
@@ -536,7 +661,9 @@ thread_local! {
 fn update_coordinates_display(pos: Vec3) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         for (id, val) in [("coord-x", pos.x), ("coord-y", pos.y), ("coord-z", pos.z)] {
-            if let Some(e) = doc.get_element_by_id(id) { e.set_text_content(Some(&format!("{:.2}", val))); }
+            if let Some(e) = doc.get_element_by_id(id) {
+                e.set_text_content(Some(&format!("{:.2}", val)));
+            }
         }
     }
 }
@@ -545,7 +672,9 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
 pub fn run() {
-    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&info.to_string().into())));
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&info.to_string().into())
+    }));
     console_log::init_with_level(log::Level::Info).expect("Logger init failed");
 
     webrtc::init_webrtc_client();
@@ -566,7 +695,10 @@ pub fn run() {
         GPU_STATE.with(|s| {
             if let Some(state) = s.borrow_mut().as_mut() {
                 state.local_team = Some(team);
-                state.remote_player = Some(RemotePlayer::new(match team { Team::A => Team::B, Team::B => Team::A }));
+                state.remote_player = Some(RemotePlayer::new(match team {
+                    Team::A => Team::B,
+                    Team::B => Team::A,
+                }));
             }
         });
     });
@@ -576,4 +708,6 @@ pub fn run() {
     let _ = event_loop.run_app(&mut App::new());
 }
 
-fn main() { run(); }
+fn main() {
+    run();
+}

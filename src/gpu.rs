@@ -14,7 +14,11 @@ pub fn create_texture_with_bind_group(
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -36,7 +40,11 @@ pub fn create_texture_with_bind_group(
             bytes_per_row: Some(width * 4),
             rows_per_image: Some(height),
         },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
     );
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -44,8 +52,14 @@ pub fn create_texture_with_bind_group(
         label: Some(&format!("{} Bind Group", label)),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
         ],
     });
 
@@ -62,7 +76,11 @@ pub fn create_uniform_buffer<T: Pod>(device: &wgpu::Device, data: &T, label: &st
 }
 
 /// Create vertex/index buffers from slices
-pub fn create_vertex_buffer<T: Pod>(device: &wgpu::Device, data: &[T], label: &str) -> wgpu::Buffer {
+pub fn create_vertex_buffer<T: Pod>(
+    device: &wgpu::Device,
+    data: &[T],
+    label: &str,
+) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
         contents: bytemuck::cast_slice(data),
@@ -88,19 +106,40 @@ pub fn create_placeholder_bind_group(
     let mut data = Vec::with_capacity(16 * 16 * 4);
     for y in 0..16u32 {
         for x in 0..16u32 {
-            let color = if ((x / 4) + (y / 4)) % 2 == 0 { [255, 0, 255, 255] } else { [0, 0, 0, 255] };
+            let color = if ((x / 4) + (y / 4)) % 2 == 0 {
+                [255, 0, 255, 255]
+            } else {
+                [0, 0, 0, 255]
+            };
             data.extend_from_slice(&color);
         }
     }
-    let (_, _, bind_group) = create_texture_with_bind_group(device, queue, layout, sampler, &data, 16, 16, "Placeholder");
+    let (_, _, bind_group) = create_texture_with_bind_group(
+        device,
+        queue,
+        layout,
+        sampler,
+        &data,
+        16,
+        16,
+        "Placeholder",
+    );
     bind_group
 }
 
 /// Create depth texture and view
-pub fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+pub fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Depth Texture"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,

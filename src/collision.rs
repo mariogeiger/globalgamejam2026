@@ -21,9 +21,9 @@ impl PhysicsWorld {
             .map(|v| Vector::new(v.x, v.y, v.z))
             .collect();
 
-        let trimesh = TriMesh::new(vertices, collision_indices.to_vec())
-            .expect("Failed to create trimesh");
-        
+        let trimesh =
+            TriMesh::new(vertices, collision_indices.to_vec()).expect("Failed to create trimesh");
+
         Some(Self { trimesh })
     }
 
@@ -33,7 +33,8 @@ impl PhysicsWorld {
             Vector::new(dir.x, dir.y, dir.z),
         );
         // Pose3::IDENTITY is the identity transformation
-        self.trimesh.cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
+        self.trimesh
+            .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
     }
 
     pub fn move_player(&self, desired_position: Vec3, velocity_y: f32) -> (Vec3, bool, bool) {

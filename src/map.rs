@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use std::collections::HashMap;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]

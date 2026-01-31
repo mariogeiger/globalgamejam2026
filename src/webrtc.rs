@@ -1,15 +1,15 @@
+use crate::player::{PlayerStateMessage, Team};
+use glam::Vec3;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
-    MessageEvent, RtcDataChannel, RtcDataChannelEvent, RtcIceCandidate,
-    RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent,
-    RtcSessionDescriptionInit, RtcSdpType, WebSocket, RtcConfiguration,
+    MessageEvent, RtcConfiguration, RtcDataChannel, RtcDataChannelEvent, RtcIceCandidate,
+    RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
+    RtcSessionDescriptionInit, WebSocket,
 };
-use serde::{Deserialize, Serialize};
-use glam::Vec3;
-use crate::player::{Team, PlayerStateMessage};
 
 const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
 const STUN_SERVERS: &[&str] = &[
@@ -21,19 +21,28 @@ const STUN_SERVERS: &[&str] = &[
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameMessage {
     pub msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")] pub x: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")] pub y: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")] pub z: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")] pub yaw: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SignalMessage {
-    #[serde(rename = "type")] msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")] sdp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")] candidate: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMid")] sdp_mid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMLineIndex")] sdp_m_line_index: Option<u16>,
+    #[serde(rename = "type")]
+    msg_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sdp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMid")]
+    sdp_mid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMLineIndex")]
+    sdp_m_line_index: Option<u16>,
 }
 
 // Consolidated state struct
@@ -133,11 +142,15 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
                     state.borrow_mut().data_channel = Some(dc);
                     state.borrow_mut().pc = Some(pc.clone());
 
-                    if let Ok(offer) = wasm_bindgen_futures::JsFuture::from(pc.create_offer()).await {
+                    if let Ok(offer) = wasm_bindgen_futures::JsFuture::from(pc.create_offer()).await
+                    {
                         let sdp = get_sdp(&offer);
                         let init = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
                         init.set_sdp(&sdp);
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init)).await.is_ok() {
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init))
+                            .await
+                            .is_ok()
+                        {
                             send_signal(&ws, "offer", Some(&sdp), None);
                         }
                     }
@@ -150,14 +163,24 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
 
                         let desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
                         desc.set_sdp(&sdp);
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc)).await.is_ok() {
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc))
+                            .await
+                            .is_ok()
+                        {
                             apply_pending_candidates(&pc, &state).await;
 
-                            if let Ok(answer) = wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await {
+                            if let Ok(answer) =
+                                wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await
+                            {
                                 let answer_sdp = get_sdp(&answer);
                                 let init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
                                 init.set_sdp(&answer_sdp);
-                                if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init)).await.is_ok() {
+                                if wasm_bindgen_futures::JsFuture::from(
+                                    pc.set_local_description(&init),
+                                )
+                                .await
+                                .is_ok()
+                                {
                                     send_signal(&ws, "answer", Some(&answer_sdp), None);
                                 }
                             }
@@ -173,7 +196,10 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
                         drop(state_ref);
                         let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
                         desc.set_sdp(&sdp);
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc)).await.is_ok() {
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc))
+                            .await
+                            .is_ok()
+                        {
                             apply_pending_candidates(&pc, &state).await;
                         }
                     }
@@ -181,7 +207,12 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
             }
             "ice-candidate" => {
                 if msg.candidate.is_some() {
-                    let has_remote = state.borrow().pc.as_ref().map(|pc| pc.remote_description().is_some()).unwrap_or(false);
+                    let has_remote = state
+                        .borrow()
+                        .pc
+                        .as_ref()
+                        .map(|pc| pc.remote_description().is_some())
+                        .unwrap_or(false);
                     if has_remote {
                         if let Some(ref pc) = state.borrow().pc {
                             add_ice_candidate(pc, &msg).await;
@@ -212,7 +243,9 @@ fn create_peer_connection(ws: &WebSocket, state: &StateRef) -> Result<RtcPeerCon
     let config = RtcConfiguration::new();
     let ice_servers = js_sys::Array::new();
     let urls = js_sys::Array::new();
-    for url in STUN_SERVERS { urls.push(&(*url).into()); }
+    for url in STUN_SERVERS {
+        urls.push(&(*url).into());
+    }
     let server = js_sys::Object::new();
     js_sys::Reflect::set(&server, &"urls".into(), &urls)?;
     ice_servers.push(&server);
@@ -242,7 +275,9 @@ fn create_peer_connection(ws: &WebSocket, state: &StateRef) -> Result<RtcPeerCon
     let onice = Closure::wrap(Box::new(move |ev: JsValue| {
         if let Some(pc) = ev.dyn_ref::<RtcPeerConnection>() {
             match pc.ice_connection_state() {
-                web_sys::RtcIceConnectionState::Connected => state_clone.borrow_mut().connected = true,
+                web_sys::RtcIceConnectionState::Connected => {
+                    state_clone.borrow_mut().connected = true
+                }
                 web_sys::RtcIceConnectionState::Failed => update_status("Connection failed."),
                 web_sys::RtcIceConnectionState::Disconnected => update_status("Connection lost."),
                 _ => {}
@@ -304,28 +339,40 @@ async fn apply_pending_candidates(pc: &RtcPeerConnection, state: &StateRef) {
 async fn add_ice_candidate(pc: &RtcPeerConnection, msg: &SignalMessage) {
     if let Some(ref candidate) = msg.candidate {
         let init = RtcIceCandidateInit::new(candidate);
-        if let Some(ref mid) = msg.sdp_mid { init.set_sdp_mid(Some(mid)); }
-        if let Some(idx) = msg.sdp_m_line_index { init.set_sdp_m_line_index(Some(idx)); }
+        if let Some(ref mid) = msg.sdp_mid {
+            init.set_sdp_mid(Some(mid));
+        }
+        if let Some(idx) = msg.sdp_m_line_index {
+            init.set_sdp_m_line_index(Some(idx));
+        }
         if let Ok(ice) = RtcIceCandidate::new(&init) {
             let _ = wasm_bindgen_futures::JsFuture::from(
-                pc.add_ice_candidate_with_opt_rtc_ice_candidate(Some(&ice))
-            ).await;
+                pc.add_ice_candidate_with_opt_rtc_ice_candidate(Some(&ice)),
+            )
+            .await;
         }
     }
 }
 
 fn get_sdp(js: &JsValue) -> String {
-    js_sys::Reflect::get(js, &"sdp".into()).ok().and_then(|v| v.as_string()).unwrap_or_default()
+    js_sys::Reflect::get(js, &"sdp".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
 }
 
 fn send_signal(ws: &WebSocket, msg_type: &str, sdp: Option<&str>, _: Option<()>) {
     let mut msg = serde_json::json!({"type": msg_type});
-    if let Some(s) = sdp { msg["sdp"] = serde_json::Value::String(s.to_string()); }
+    if let Some(s) = sdp {
+        msg["sdp"] = serde_json::Value::String(s.to_string());
+    }
     let _ = ws.send_with_str(&msg.to_string());
 }
 
 fn set_callback<T: wasm_bindgen::convert::FromWasmAbi + 'static, F: FnMut(T) + 'static>(
-    ws: &WebSocket, event: &str, mut f: F
+    ws: &WebSocket,
+    event: &str,
+    mut f: F,
 ) {
     let closure = Closure::wrap(Box::new(move |e: T| f(e)) as Box<dyn FnMut(T)>);
     match event {
@@ -363,18 +410,24 @@ pub fn init_webrtc_client() {
 
 pub fn send_player_state_to_peer(position: Vec3, yaw: f32) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() { client.send_player_state(position, yaw); }
+        if let Some(ref client) = *c.borrow() {
+            client.send_player_state(position, yaw);
+        }
     });
 }
 
 pub fn set_player_state_callback<F: Fn(Vec3, f32) + 'static>(callback: F) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() { client.set_on_player_state(callback); }
+        if let Some(ref client) = *c.borrow() {
+            client.set_on_player_state(callback);
+        }
     });
 }
 
 pub fn set_team_assign_callback<F: Fn(Team) + 'static>(callback: F) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() { client.set_on_team_assign(callback); }
+        if let Some(ref client) = *c.borrow() {
+            client.set_on_team_assign(callback);
+        }
     });
 }
