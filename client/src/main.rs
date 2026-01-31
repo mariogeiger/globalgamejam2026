@@ -27,8 +27,8 @@ use glb::load_glb_from_bytes;
 use gpu::{
     camera_bind_group_layout, create_depth_texture, create_index_buffer,
     create_placeholder_bind_group, create_render_target_texture, create_texture_with_bind_group,
-    create_uniform_buffer, create_vertex_buffer, texture_bind_group_layout,
-    uniform_bind_group_layout,
+    create_uniform_buffer, create_vertex_buffer, depth_texture_bind_group_layout,
+    texture_bind_group_layout, uniform_bind_group_layout,
 };
 use map::{LoadedMap, MapVertex};
 use player::{Player, PlayerUniform, PlayerVertex, RemotePlayer, Team, generate_player_box};
@@ -41,7 +41,7 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
 }
 
-/// Post-processing: motion blur (direction, strength) and smear (previous-frame blend).
+/// Post-processing: motion blur, smear, screen/depth, and camera clip planes.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct PostProcessUniform {
@@ -49,6 +49,11 @@ struct PostProcessUniform {
     blur_strength: f32,
     /// How much of the previous frame to blend (0 = no smear, ~0.9 = strong trails).
     smear_factor: f32,
+    /// Viewport size (width, height) for pixel (x,y) from tex_coord.
+    resolution: [f32; 2],
+    /// Near and far clip plane distances (for linear depth from depth buffer).
+    depth_near: f32,
+    depth_far: f32,
 }
 
 /// Fullscreen quad for post-processing pass (position + uv).
@@ -121,6 +126,8 @@ struct GpuState {
     offscreen_view: wgpu::TextureView,
     postprocess_pipeline: wgpu::RenderPipeline,
     postprocess_bind_group: wgpu::BindGroup,
+    postprocess_depth_bind_group: wgpu::BindGroup,
+    postprocess_depth_sampler: wgpu::Sampler,
     postprocess_uniform_buffer: wgpu::Buffer,
     postprocess_uniform_bind_group: wgpu::BindGroup,
     postprocess_previous_bind_group_0: wgpu::BindGroup,
@@ -292,6 +299,7 @@ impl GpuState {
             source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
         });
         let postprocess_texture_layout = texture_bind_group_layout(&device);
+        let postprocess_depth_layout = depth_texture_bind_group_layout(&device);
         let postprocess_uniform_layout =
             uniform_bind_group_layout(&device, "Postprocess Uniform Layout");
         let postprocess_pipeline_layout =
@@ -301,6 +309,7 @@ impl GpuState {
                     &postprocess_texture_layout,
                     &postprocess_uniform_layout,
                     &postprocess_texture_layout,
+                    &postprocess_depth_layout,
                 ],
                 immediate_size: 0,
             });
@@ -354,6 +363,29 @@ impl GpuState {
                 },
             ],
         });
+        let postprocess_depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Postprocess Depth Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let postprocess_depth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Postprocess Depth Bind Group"),
+            layout: &postprocess_depth_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&postprocess_depth_sampler),
+                },
+            ],
+        });
         let postprocess_previous_bind_group_0 =
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Postprocess Previous Bind Group 0"),
@@ -388,6 +420,9 @@ impl GpuState {
             blur_direction: [0.0, 0.0],
             blur_strength: 0.0,
             smear_factor: 0.85,
+            resolution: [width as f32, height as f32],
+            depth_near: 1.0,
+            depth_far: 10000.0,
         };
         let postprocess_uniform_buffer =
             create_uniform_buffer(&device, &postprocess_uniform, "Postprocess Uniform");
@@ -656,6 +691,8 @@ impl GpuState {
             offscreen_view,
             postprocess_pipeline,
             postprocess_bind_group,
+            postprocess_depth_bind_group,
+            postprocess_depth_sampler,
             postprocess_uniform_buffer,
             postprocess_uniform_bind_group,
             postprocess_previous_bind_group_0,
@@ -709,6 +746,7 @@ impl GpuState {
             self.history_view_1 = history_view_1;
 
             let postprocess_texture_layout = texture_bind_group_layout(&self.device);
+            let postprocess_depth_layout = depth_texture_bind_group_layout(&self.device);
             self.postprocess_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Postprocess Bind Group (scene)"),
                 layout: &postprocess_texture_layout,
@@ -723,6 +761,21 @@ impl GpuState {
                     },
                 ],
             });
+            self.postprocess_depth_bind_group =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Postprocess Depth Bind Group"),
+                    layout: &postprocess_depth_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.depth_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.postprocess_depth_sampler),
+                        },
+                    ],
+                });
             self.postprocess_previous_bind_group_0 =
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Postprocess Previous Bind Group 0"),
@@ -927,6 +980,9 @@ impl GpuState {
                 blur_direction,
                 blur_strength,
                 smear_factor,
+                resolution: [self.config.width as f32, self.config.height as f32],
+                depth_near: 1.0,
+                depth_far: 10000.0,
             }]),
         );
 
@@ -976,6 +1032,7 @@ impl GpuState {
             pass.set_bind_group(0, &self.postprocess_bind_group, &[]);
             pass.set_bind_group(1, &self.postprocess_uniform_bind_group, &[]);
             pass.set_bind_group(2, postprocess_previous_bind_group, &[]);
+            pass.set_bind_group(3, &self.postprocess_depth_bind_group, &[]);
             pass.set_vertex_buffer(0, self.fullscreen_quad_buffer.slice(..));
             pass.draw(0..6, 0..1);
         }
