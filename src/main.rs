@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use instant::Instant;
+use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use bytemuck::{Pod, Zeroable};
@@ -1063,7 +1063,9 @@ use wasm_bindgen::prelude::*;
 pub fn run() {
     #[cfg(target_arch = "wasm32")]
     {
-        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        std::panic::set_hook(Box::new(|info| {
+            web_sys::console::error_1(&info.to_string().into());
+        }));
         console_log::init_with_level(log::Level::Info).expect("Couldn't initialize logger");
         
         // Initialize WebRTC for multiplayer

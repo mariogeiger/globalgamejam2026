@@ -11,7 +11,7 @@ env_logger = "*"
 log = "*"
 bytemuck = { version = "*", features = ["derive"] }
 glam = "*"
-instant = { version = "*", features = ["wasm-bindgen"] }
+web-time = "*"
 gltf = "*"
 image = { version = "*", default-features = false, features = ["png", "jpeg"] }
 rapier3d = { version = "*", features = ["wasm-bindgen"] }
@@ -19,13 +19,11 @@ rand = { version = "0.8", features = ["small_rng"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-console_error_panic_hook = "*"
 console_log = "*"
 wasm-bindgen = "*"
 wasm-bindgen-futures = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
-gloo-timers = { version = "*", features = ["futures"] }
 js-sys = "*"
 web-sys = { version = "*", features = [
     "Document", "Window", "Element", "HtmlCanvasElement",
@@ -36,5 +34,5 @@ web-sys = { version = "*", features = [
     "RtcIceGatheringState", "MessageEvent",
     "HtmlTextAreaElement", "HtmlButtonElement", "HtmlElement",
     "WebSocket", "BinaryType", "CloseEvent", "ErrorEvent",
-    "RtcIceServer", "MouseEvent", "PointerEvent"
+    "RtcIceServer", "MouseEvent", "PointerEvent", "console"
 ] }
