@@ -827,7 +827,14 @@ impl GpuState {
         let dt = (now - self.last_frame_time).as_secs_f32().min(0.1);
         self.last_frame_time = now;
 
+        let prev_pos = self.player.position;
         self.player.update(dt);
+
+        // Anti-tunnelling: if we would pass through geometry, clamp desired position to just before hit
+        let desired_pos = self
+            .physics
+            .clamp_desired_to_path(prev_pos, self.player.position);
+        self.player.position = desired_pos;
 
         let (new_pos, on_ground) = self
             .physics

@@ -34,6 +34,39 @@ impl PhysicsWorld {
             .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
     }
 
+    /// Raycast from previous position toward next; if geometry is hit along the segment,
+    /// return a position clamped to just before the hit (anti-tunnelling).
+    /// Uses two rays (step height and head height) and clamps to the earliest hit.
+    pub fn clamp_desired_to_path(&self, prev_pos: Vec3, next_pos: Vec3) -> Vec3 {
+        let delta = next_pos - prev_pos;
+        let len = delta.length();
+        if len <= 1e-6 {
+            return next_pos;
+        }
+        let dir = delta / len;
+        let max_dist = len;
+
+        // Ignore hits very close to origin (already inside or on surface)
+        const MIN_TOI: f32 = 0.5;
+
+        let mut min_hit = max_dist + 1.0;
+        for height in [STEP_OVER_HEIGHT, PLAYER_HEIGHT] {
+            let origin = prev_pos + Vec3::new(0.0, height, 0.0);
+            if let Some(toi) = self.cast_ray(origin, dir, max_dist) {
+                if toi > MIN_TOI && toi < min_hit {
+                    min_hit = toi;
+                }
+            }
+        }
+
+        if min_hit <= max_dist {
+            let safe_dist = (min_hit - PATH_HIT_MARGIN).max(0.0);
+            prev_pos + dir * safe_dist
+        } else {
+            next_pos
+        }
+    }
+
     pub fn move_player(&self, desired_position: Vec3, velocity: Vec3) -> (Vec3, bool) {
         let mut final_pos = desired_position;
         let mut on_ground = false;

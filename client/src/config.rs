@@ -15,5 +15,9 @@ pub const JUMP_DURATION: f32 = 0.4; // total air time in seconds
 pub const GRAVITY: f32 = 8.0 * JUMP_HEIGHT / (JUMP_DURATION * JUMP_DURATION);
 pub const JUMP_VELOCITY: f32 = 4.0 * JUMP_HEIGHT / JUMP_DURATION;
 
+// Collision: path check (anti-tunnelling)
+/// Minimum distance to keep from a hit when clamping movement along a path.
+pub const PATH_HIT_MARGIN: f32 = 2.0;
+
 // Map
 pub const RESPAWN_MARGIN: f32 = 500.0;
