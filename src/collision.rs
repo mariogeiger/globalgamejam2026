@@ -65,7 +65,7 @@ impl PhysicsWorld {
     }
     
     /// Move player with simple collision detection using ray casting
-    pub fn move_player(&mut self, desired_position: Vec3) -> (Vec3, bool) {
+    pub fn move_player(&mut self, desired_position: Vec3, velocity_y: f32) -> (Vec3, bool, bool) {
         self.query_pipeline.update(&self.collider_set);
         
         let filter = QueryFilter::default()
@@ -73,6 +73,7 @@ impl PhysicsWorld {
         
         let mut final_pos = desired_position;
         let mut on_ground = false;
+        let mut hit_ceiling = false;
         
         // Ground check - cast ray downward from player feet
         let ray = Ray::new(
@@ -95,6 +96,32 @@ impl PhysicsWorld {
                 // Keep player above ground
                 if final_pos.y < ground_y {
                     final_pos.y = ground_y;
+                }
+            }
+        }
+        
+        // Ceiling check - cast ray upward from player head (only when moving up)
+        if velocity_y > 0.0 {
+            let ray = Ray::new(
+                Point::new(desired_position.x, desired_position.y + 72.0, desired_position.z),
+                vector![0.0, 1.0, 0.0],
+            );
+            
+            if let Some((_, toi)) = self.query_pipeline.cast_ray(
+                &self.rigid_body_set,
+                &self.collider_set,
+                &ray,
+                50.0,
+                true,
+                filter,
+            ) {
+                // If ceiling is close, stop upward movement
+                if toi < 10.0 {
+                    hit_ceiling = true;
+                    let ceiling_y = desired_position.y + 72.0 + toi - 72.0 - 1.0;
+                    if final_pos.y > ceiling_y {
+                        final_pos.y = ceiling_y;
+                    }
                 }
             }
         }
@@ -126,6 +153,6 @@ impl PhysicsWorld {
         let player_body = &mut self.rigid_body_set[self.player_body_handle];
         player_body.set_translation(vector![final_pos.x, final_pos.y, final_pos.z], true);
         
-        (final_pos, on_ground)
+        (final_pos, on_ground, hit_ceiling)
     }
 }
