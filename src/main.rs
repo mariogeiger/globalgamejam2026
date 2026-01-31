@@ -5,7 +5,6 @@ use web_time::Instant;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use rand::prelude::*;
-use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, WindowEvent, DeviceEvent},
@@ -14,20 +13,24 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod config;
+mod gpu;
 mod map;
 mod glb;
 mod player;
 mod collision;
-mod network_player;
 mod webrtc;
 
+use config::RESPAWN_MARGIN;
+use gpu::{create_depth_texture, create_texture_with_bind_group, create_placeholder_bind_group,
+         create_vertex_buffer, create_index_buffer, create_uniform_buffer,
+         texture_bind_group_layout, camera_bind_group_layout, uniform_bind_group_layout};
 use map::{MapVertex, LoadedMap};
 use glb::load_glb_from_bytes;
-use network_player::{PlayerVertex, PlayerUniform, RemotePlayer, Team, generate_player_box};
+use player::{Player, PlayerVertex, PlayerUniform, RemotePlayer, Team, generate_player_box};
+use collision::PhysicsWorld;
 
 const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
-use player::Player;
-use collision::PhysicsWorld;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -57,7 +60,6 @@ struct GpuState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
     render_pipeline: wgpu::RenderPipeline,
     camera_uniform_buffer: wgpu::Buffer,
@@ -67,10 +69,8 @@ struct GpuState {
     physics: Option<PhysicsWorld>,
     last_frame_time: Instant,
     cursor_grabbed: bool,
-    // Spawn points and map bounds for respawning
     spawn_points: Vec<Vec3>,
     map_bounds: Option<(Vec3, Vec3)>,
-    // Multiplayer
     local_team: Option<Team>,
     remote_player: Option<RemotePlayer>,
     player_render: Option<PlayerRenderData>,
@@ -85,14 +85,13 @@ impl GpuState {
             let h = (web_window.inner_height().unwrap().as_f64().unwrap() * dpr) as u32;
             (w.max(1), h.max(1))
         };
-        
+
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
             ..Default::default()
         });
 
         let surface = instance.create_surface(window.clone()).unwrap();
-
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -125,81 +124,34 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
-        // Create depth texture
-        let (depth_texture, depth_view) = create_depth_texture(&device, width, height);
+        let (_, depth_view) = create_depth_texture(&device, width, height);
 
-        // Load shader
-        let shader_source = include_str!("map.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Map Shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("map.wgsl").into()),
         });
 
-        // Camera uniform buffer
-        let camera_uniform = CameraUniform {
-            view_proj: Mat4::IDENTITY.to_cols_array_2d(),
-        };
-        let camera_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let camera_uniform = CameraUniform { view_proj: Mat4::IDENTITY.to_cols_array_2d() };
+        let camera_uniform_buffer = create_uniform_buffer(&device, &camera_uniform, "Camera Uniform");
 
-        // Camera bind group layout
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Camera Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
+        let camera_layout = camera_bind_group_layout(&device);
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera Bind Group"),
-            layout: &camera_bind_group_layout,
+            layout: &camera_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: camera_uniform_buffer.as_entire_binding(),
             }],
         });
 
-        // Texture bind group layout
-        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Texture Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let texture_layout = texture_bind_group_layout(&device);
 
-        // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Map Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &texture_bind_group_layout],
+            bind_group_layouts: &[&camera_layout, &texture_layout],
             immediate_size: 0,
         });
 
-        // Render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Map Render Pipeline"),
             layout: Some(&pipeline_layout),
@@ -221,12 +173,8 @@ impl GpuState {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // BSP faces can be visible from both sides
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
+                cull_mode: None,
+                ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -240,219 +188,63 @@ impl GpuState {
             cache: None,
         });
 
-        // Default sampler
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Map Texture Sampler"),
+            label: Some("Map Sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest, // Crispy pixel textures
+            mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
-        // Process map data if available
         let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) = loaded_map {
-            let mut gpu_textures: HashMap<String, (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)> = HashMap::new();
-            
-            // Create GPU textures
+            let mut gpu_textures: HashMap<String, wgpu::BindGroup> = HashMap::new();
+
             for (name, tex_data) in &loaded_map.textures {
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(name),
-                    size: wgpu::Extent3d {
-                        width: tex_data.width,
-                        height: tex_data.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &tex_data.rgba,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(tex_data.width * 4),
-                        rows_per_image: Some(tex_data.height),
-                    },
-                    wgpu::Extent3d {
-                        width: tex_data.width,
-                        height: tex_data.height,
-                        depth_or_array_layers: 1,
-                    },
+                let (_, _, bg) = create_texture_with_bind_group(
+                    &device, &queue, &texture_layout, &sampler,
+                    &tex_data.rgba, tex_data.width, tex_data.height, name,
                 );
-
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("{} Bind Group", name)),
-                    layout: &texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&sampler),
-                        },
-                    ],
-                });
-
-                gpu_textures.insert(name.clone(), (texture, view, bind_group));
+                gpu_textures.insert(name.clone(), bg);
             }
 
-            // Create placeholder texture for missing textures
-            let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Placeholder"),
-                size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            
-            // Magenta/black checker
-            let mut placeholder_data = Vec::with_capacity(16 * 16 * 4);
-            for y in 0..16 {
-                for x in 0..16 {
-                    if ((x / 4) + (y / 4)) % 2 == 0 {
-                        placeholder_data.extend_from_slice(&[255, 0, 255, 255]);
-                    } else {
-                        placeholder_data.extend_from_slice(&[0, 0, 0, 255]);
-                    }
-                }
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &placeholder_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &placeholder_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(16 * 4),
-                    rows_per_image: Some(16),
-                },
-                wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
-            );
-            let placeholder_view = placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let placeholder_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Placeholder Bind Group"),
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&placeholder_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
+            let placeholder = create_placeholder_bind_group(&device, &queue, &texture_layout, &sampler);
 
-            // Create mesh render data
-            let mut map_meshes = Vec::new();
-            for mesh in &loaded_map.meshes {
-                if mesh.vertices.is_empty() || mesh.indices.is_empty() {
-                    continue;
-                }
-
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} Vertex Buffer", mesh.texture_name)),
-                    contents: bytemuck::cast_slice(&mesh.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("{} Index Buffer", mesh.texture_name)),
-                    contents: bytemuck::cast_slice(&mesh.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-
-                let bind_group = if let Some((_, _, bg)) = gpu_textures.get(&mesh.texture_name) {
-                    bg.clone()
-                } else {
-                    placeholder_bind_group.clone()
-                };
-
-                map_meshes.push(MapRenderData {
-                    vertex_buffer,
-                    index_buffer,
+            let map_meshes: Vec<_> = loaded_map.meshes.iter()
+                .filter(|m| !m.vertices.is_empty() && !m.indices.is_empty())
+                .map(|mesh| MapRenderData {
+                    vertex_buffer: create_vertex_buffer(&device, &mesh.vertices, &mesh.texture_name),
+                    index_buffer: create_index_buffer(&device, &mesh.indices, &mesh.texture_name),
                     index_count: mesh.indices.len() as u32,
-                    bind_group,
-                });
-            }
+                    bind_group: gpu_textures.get(&mesh.texture_name).cloned().unwrap_or_else(|| placeholder.clone()),
+                })
+                .collect();
 
-            let spawn_points = loaded_map.spawn_points;
-            let map_bounds = Some((loaded_map.bounds_min, loaded_map.bounds_max));
-            
-            // Pick a random spawn point
-            let spawn_idx = rand::thread_rng().gen_range(0..spawn_points.len());
-            let initial_spawn = spawn_points[spawn_idx];
-            
+            let spawn_idx = rand::thread_rng().gen_range(0..loaded_map.spawn_points.len());
+            let initial_spawn = loaded_map.spawn_points[spawn_idx];
             let player = Player::new(initial_spawn);
-            
-            let physics = PhysicsWorld::new(
-                &loaded_map.collision_vertices,
-                &loaded_map.collision_indices,
-                initial_spawn,
-            );
+            let physics = PhysicsWorld::new(&loaded_map.collision_vertices, &loaded_map.collision_indices);
 
-            (map_meshes, player, Some(physics), spawn_points, map_bounds)
+            (map_meshes, player, physics, loaded_map.spawn_points, Some((loaded_map.bounds_min, loaded_map.bounds_max)))
         } else {
-            // No map loaded - create empty state
-            let spawn_points = vec![Vec3::new(0.0, 100.0, 0.0)];
-            (Vec::new(), Player::new(spawn_points[0]), None, spawn_points, None)
+            let spawn = vec![Vec3::new(0.0, 100.0, 0.0)];
+            (Vec::new(), Player::new(spawn[0]), None, spawn, None)
         };
 
-        // Create player rendering resources
         let player_render = {
-            // Player shader
-            let player_shader_source = include_str!("player.wgsl");
             let player_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Player Shader"),
-                source: wgpu::ShaderSource::Wgsl(player_shader_source.into()),
+                source: wgpu::ShaderSource::Wgsl(include_str!("player.wgsl").into()),
             });
 
-            // Player uniform bind group layout
-            let player_uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Player Uniform Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-            // Player pipeline layout
+            let player_uniform_layout = uniform_bind_group_layout(&device, "Player Uniform Layout");
             let player_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Player Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout, &player_uniform_layout],
+                bind_group_layouts: &[&camera_layout, &player_uniform_layout],
                 immediate_size: 0,
             });
 
-            // Player render pipeline
             let player_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Player Render Pipeline"),
                 layout: Some(&player_pipeline_layout),
@@ -474,12 +266,8 @@ impl GpuState {
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
                     cull_mode: Some(wgpu::Face::Back),
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
+                    ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
@@ -493,71 +281,31 @@ impl GpuState {
                 cache: None,
             });
 
-            // Generate player box mesh
             let (vertices, indices) = generate_player_box();
-
-            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Player Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Player Index Buffer"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-            // Player uniform buffer
-            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Player Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[PlayerUniform {
-                    model: glam::Mat4::IDENTITY.to_cols_array_2d(),
-                    color: [1.0, 0.0, 0.0, 1.0],
-                }]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Player Bind Group"),
-                layout: &player_uniform_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                }],
-            });
+            let uniform = PlayerUniform { model: Mat4::IDENTITY.to_cols_array_2d(), color: [1.0, 0.0, 0.0, 1.0] };
 
             Some(PlayerRenderData {
-                vertex_buffer,
-                index_buffer,
+                vertex_buffer: create_vertex_buffer(&device, &vertices, "Player Vertex"),
+                index_buffer: create_index_buffer(&device, &indices, "Player Index"),
                 index_count: indices.len() as u32,
                 pipeline: player_pipeline,
-                uniform_buffer,
-                bind_group,
+                uniform_buffer: create_uniform_buffer(&device, &uniform, "Player Uniform"),
+                bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Player Bind Group"),
+                    layout: &player_uniform_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: create_uniform_buffer(&device, &uniform, "Player Uniform").as_entire_binding(),
+                    }],
+                }),
             })
         };
 
         Self {
-            window,
-            surface,
-            device,
-            queue,
-            config,
-            depth_texture,
-            depth_view,
-            render_pipeline,
-            camera_uniform_buffer,
-            camera_bind_group,
-            map_meshes,
-            player,
-            physics,
-            last_frame_time: Instant::now(),
-            cursor_grabbed: false,
-            spawn_points,
-            map_bounds,
-            local_team: None,
-            remote_player: None,
-            player_render,
+            window, surface, device, queue, config, depth_view, render_pipeline,
+            camera_uniform_buffer, camera_bind_group, map_meshes, player, physics,
+            last_frame_time: Instant::now(), cursor_grabbed: false, spawn_points,
+            map_bounds, local_team: None, remote_player: None, player_render,
         }
     }
 
@@ -566,109 +314,74 @@ impl GpuState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            
-            // Recreate depth texture
-            let (depth_texture, depth_view) = create_depth_texture(&self.device, new_size.width, new_size.height);
-            self.depth_texture = depth_texture;
+            let (_, depth_view) = create_depth_texture(&self.device, new_size.width, new_size.height);
             self.depth_view = depth_view;
         }
     }
 
     fn update(&mut self) {
         let now = Instant::now();
-        let dt = (now - self.last_frame_time).as_secs_f32();
+        let dt = (now - self.last_frame_time).as_secs_f32().min(0.1);
         self.last_frame_time = now;
 
-        // Cap dt to prevent huge jumps
-        let dt = dt.min(0.1);
-
-        // Update player
         self.player.update(dt);
 
-        // Apply physics collision
-        if let Some(physics) = &mut self.physics {
-            let desired_pos = self.player.position;
-            let velocity_y = self.player.velocity.y;
-            let (new_pos, on_ground, hit_ceiling) = physics.move_player(desired_pos, velocity_y);
+        if let Some(ref physics) = self.physics {
+            let (new_pos, on_ground, hit_ceiling) = physics.move_player(self.player.position, self.player.velocity.y);
             self.player.position = new_pos;
             self.player.set_on_ground(on_ground, None);
-            if hit_ceiling {
-                self.player.velocity.y = 0.0; // Stop upward movement on ceiling hit
-            }
+            if hit_ceiling { self.player.velocity.y = 0.0; }
         }
 
-        // Check if player is outside map bounds and respawn
         if let Some((bounds_min, bounds_max)) = self.map_bounds {
-            const RESPAWN_MARGIN: f32 = 500.0; // Distance outside bounds before respawn
             let pos = self.player.position;
-            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
-                || pos.x > bounds_max.x + RESPAWN_MARGIN
-                || pos.y < bounds_min.y - RESPAWN_MARGIN
-                || pos.y > bounds_max.y + RESPAWN_MARGIN
-                || pos.z < bounds_min.z - RESPAWN_MARGIN
-                || pos.z > bounds_max.z + RESPAWN_MARGIN;
-            
+            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN || pos.x > bounds_max.x + RESPAWN_MARGIN
+                || pos.y < bounds_min.y - RESPAWN_MARGIN || pos.y > bounds_max.y + RESPAWN_MARGIN
+                || pos.z < bounds_min.z - RESPAWN_MARGIN || pos.z > bounds_max.z + RESPAWN_MARGIN;
+
             if outside && !self.spawn_points.is_empty() {
                 log::info!("Player fell out of map, respawning");
-                let spawn_idx = rand::thread_rng().gen_range(0..self.spawn_points.len());
-                self.player.respawn(self.spawn_points[spawn_idx]);
+                let idx = rand::thread_rng().gen_range(0..self.spawn_points.len());
+                self.player.respawn(self.spawn_points[idx]);
             }
         }
 
-        // Send player state to remote peer
         if self.local_team.is_some() {
             webrtc::send_player_state_to_peer(self.player.position, self.player.yaw);
         }
 
-        // Update coordinate display
         update_coordinates_display(self.player.position);
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.update();
 
-        // Update camera uniform
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let projection = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0);
-        let view = self.player.view_matrix();
-        let view_proj = projection * view;
+        let view_proj = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0) * self.player.view_matrix();
 
-        self.queue.write_buffer(
-            &self.camera_uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[CameraUniform { view_proj: view_proj.to_cols_array_2d() }]),
-        );
+        self.queue.write_buffer(&self.camera_uniform_buffer, 0,
+            bytemuck::cast_slice(&[CameraUniform { view_proj: view_proj.to_cols_array_2d() }]));
 
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Map Render Pass"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.5,
-                            g: 0.7,
-                            b: 0.9,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.5, g: 0.7, b: 0.9, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -676,63 +389,33 @@ impl GpuState {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
             for mesh in &self.map_meshes {
-                render_pass.set_bind_group(1, &mesh.bind_group, &[]);
-                render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                pass.set_bind_group(1, &mesh.bind_group, &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
 
-            // Render remote player if connected
-            if let (Some(remote), Some(player_render)) = (&self.remote_player, &self.player_render) {
-                // Update player uniform with remote player's transform and team color
-                let uniform = PlayerUniform {
-                    model: remote.model_matrix().to_cols_array_2d(),
-                    color: remote.team.color(),
-                };
-                self.queue.write_buffer(
-                    &player_render.uniform_buffer,
-                    0,
-                    bytemuck::cast_slice(&[uniform]),
-                );
+            if let (Some(remote), Some(pr)) = (&self.remote_player, &self.player_render) {
+                let uniform = PlayerUniform { model: remote.model_matrix().to_cols_array_2d(), color: remote.team.color() };
+                self.queue.write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
 
-                render_pass.set_pipeline(&player_render.pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                render_pass.set_bind_group(1, &player_render.bind_group, &[]);
-                render_pass.set_vertex_buffer(0, player_render.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(player_render.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..player_render.index_count, 0, 0..1);
+                pass.set_pipeline(&pr.pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_bind_group(1, &pr.bind_group, &[]);
+                pass.set_vertex_buffer(0, pr.vertex_buffer.slice(..));
+                pass.set_index_buffer(pr.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..pr.index_count, 0, 0..1);
             }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
         Ok(())
     }
-
-}
-
-fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Depth Texture"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Depth32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
 }
 
 struct App {
@@ -742,76 +425,48 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let loaded_map = match load_glb_from_bytes(EMBEDDED_MAP) {
-            Ok(map) => {
-                log::info!("Loaded embedded GLB with {} meshes, {} textures", 
-                    map.meshes.len(), map.textures.len());
-                Some(map)
-            }
-            Err(e) => {
-                log::warn!("Failed to load embedded map: {}", e);
-                None
-            }
-        };
-        
-        Self {
-            gpu_state: None,
-            loaded_map,
+        let loaded_map = load_glb_from_bytes(EMBEDDED_MAP).ok();
+        if let Some(ref map) = loaded_map {
+            log::info!("Loaded GLB: {} meshes, {} textures", map.meshes.len(), map.textures.len());
         }
+        Self { gpu_state: None, loaded_map }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu_state.is_some() {
-            return;
-        }
+        if self.gpu_state.is_some() { return; }
 
-        let window_attrs = Window::default_attributes()
-            .with_title("CS 1.6 Map Viewer");
-        
-        let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
+        let window = Arc::new(event_loop.create_window(Window::default_attributes().with_title("CS 1.6 Map Viewer")).unwrap());
 
         use winit::platform::web::WindowExtWebSys;
-        
-        let canvas = window.canvas().expect("Couldn't get canvas");
-        
+        let canvas = window.canvas().expect("No canvas");
+
         let web_window = web_sys::window().expect("No window");
         let dpr = web_window.device_pixel_ratio();
-        let width = (web_window.inner_width().unwrap().as_f64().unwrap() * dpr) as u32;
-        let height = (web_window.inner_height().unwrap().as_f64().unwrap() * dpr) as u32;
-        
-        canvas.set_width(width);
-        canvas.set_height(height);
+        let (w, h) = (
+            (web_window.inner_width().unwrap().as_f64().unwrap() * dpr) as u32,
+            (web_window.inner_height().unwrap().as_f64().unwrap() * dpr) as u32,
+        );
+        canvas.set_width(w);
+        canvas.set_height(h);
         canvas.style().set_css_text("width: 100%; height: 100%; display: block;");
-        
+
         web_sys::window()
             .and_then(|win| win.document())
-            .and_then(|doc| {
-                let dst = doc.get_element_by_id("wasm-container")?;
-                dst.append_child(&canvas).ok()?;
-                Some(())
-            })
-            .expect("Couldn't append canvas to document body.");
+            .and_then(|doc| doc.get_element_by_id("wasm-container")?.append_child(&canvas).ok())
+            .expect("Couldn't append canvas");
 
         let loaded_map = self.loaded_map.take();
-        
         let window_clone = window.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let state = GpuState::new(window_clone.clone(), loaded_map).await;
-            GPU_STATE.with(|s| {
-                *s.borrow_mut() = Some(state);
-            });
+            GPU_STATE.with(|s| *s.borrow_mut() = Some(state));
             window_clone.request_redraw();
         });
     }
 
-    fn device_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _device_id: winit::event::DeviceId,
-        event: DeviceEvent,
-    ) {
+    fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
             GPU_STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
@@ -824,76 +479,45 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
-            WindowEvent::Resized(physical_size) => {
-                GPU_STATE.with(|s| {
-                    if let Some(state) = s.borrow_mut().as_mut() {
-                        state.resize(physical_size);
-                    }
-                });
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                GPU_STATE.with(|s| { if let Some(state) = s.borrow_mut().as_mut() { state.resize(size); } });
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(key_code) = event.physical_key {
+                if let PhysicalKey::Code(key) = event.physical_key {
                     GPU_STATE.with(|s| {
                         if let Some(state) = s.borrow_mut().as_mut() {
                             match event.state {
-                                ElementState::Pressed => {
-                                    if key_code == KeyCode::Escape {
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(document) = window.document() {
-                                                document.exit_pointer_lock();
-                                            }
-                                        }
-                                        state.cursor_grabbed = false;
-                                    } else {
-                                        state.player.handle_key_press(key_code);
-                                    }
+                                ElementState::Pressed if key == KeyCode::Escape => {
+                                    web_sys::window().and_then(|w| w.document()).map(|d| d.exit_pointer_lock());
+                                    state.cursor_grabbed = false;
                                 }
-                                ElementState::Released => {
-                                    state.player.handle_key_release(key_code);
-                                }
+                                ElementState::Pressed => state.player.handle_key_press(key),
+                                ElementState::Released => state.player.handle_key_release(key),
                             }
                             state.window.request_redraw();
                         }
                     });
                 }
             }
-            WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
-                if button_state == ElementState::Pressed {
-                    if let Some(window) = web_sys::window() {
-                        if let Some(document) = window.document() {
-                            if let Some(canvas) = document.get_element_by_id("wasm-container") {
-                                if let Some(canvas) = canvas.first_element_child() {
-                                    canvas.request_pointer_lock();
-                                    GPU_STATE.with(|s| {
-                                        if let Some(state) = s.borrow_mut().as_mut() {
-                                            state.cursor_grabbed = true;
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.get_element_by_id("wasm-container"))
+                    .and_then(|c| c.first_element_child())
+                    .map(|canvas| {
+                        canvas.request_pointer_lock();
+                        GPU_STATE.with(|s| { if let Some(state) = s.borrow_mut().as_mut() { state.cursor_grabbed = true; } });
+                    });
             }
             WindowEvent::RedrawRequested => {
                 GPU_STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
                         match state.render() {
-                            Ok(_) => {
-                                state.window.request_redraw();
-                            }
-                            Err(wgpu::SurfaceError::Lost) => {
-                                let size = winit::dpi::PhysicalSize::new(
-                                    state.config.width,
-                                    state.config.height,
-                                );
-                                state.resize(size);
-                            }
+                            Ok(_) => state.window.request_redraw(),
+                            Err(wgpu::SurfaceError::Lost) => state.resize(winit::dpi::PhysicalSize::new(state.config.width, state.config.height)),
                             Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                             Err(e) => log::error!("Render error: {:?}", e),
                         }
@@ -909,33 +533,23 @@ thread_local! {
     static GPU_STATE: RefCell<Option<GpuState>> = const { RefCell::new(None) };
 }
 
-use wasm_bindgen::prelude::*;
-
-fn update_coordinates_display(position: Vec3) {
-    if let Some(window) = web_sys::window() {
-        if let Some(document) = window.document() {
-            if let Some(elem) = document.get_element_by_id("coord-x") {
-                elem.set_text_content(Some(&format!("{:.2}", position.x)));
-            }
-            if let Some(elem) = document.get_element_by_id("coord-y") {
-                elem.set_text_content(Some(&format!("{:.2}", position.y)));
-            }
-            if let Some(elem) = document.get_element_by_id("coord-z") {
-                elem.set_text_content(Some(&format!("{:.2}", position.z)));
-            }
+fn update_coordinates_display(pos: Vec3) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        for (id, val) in [("coord-x", pos.x), ("coord-y", pos.y), ("coord-z", pos.z)] {
+            if let Some(e) = doc.get_element_by_id(id) { e.set_text_content(Some(&format!("{:.2}", val))); }
         }
     }
 }
 
+use wasm_bindgen::prelude::*;
+
 #[wasm_bindgen(start)]
 pub fn run() {
-    std::panic::set_hook(Box::new(|info| {
-        web_sys::console::error_1(&info.to_string().into());
-    }));
-    console_log::init_with_level(log::Level::Info).expect("Couldn't initialize logger");
-    
+    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&info.to_string().into())));
+    console_log::init_with_level(log::Level::Info).expect("Logger init failed");
+
     webrtc::init_webrtc_client();
-    
+
     webrtc::set_player_state_callback(|position, yaw| {
         GPU_STATE.with(|s| {
             if let Some(state) = s.borrow_mut().as_mut() {
@@ -946,28 +560,20 @@ pub fn run() {
             }
         });
     });
-    
+
     webrtc::set_team_assign_callback(|team| {
         log::info!("Assigned to team: {:?}", team);
         GPU_STATE.with(|s| {
             if let Some(state) = s.borrow_mut().as_mut() {
                 state.local_team = Some(team);
-                let remote_team = match team {
-                    Team::A => Team::B,
-                    Team::B => Team::A,
-                };
-                state.remote_player = Some(RemotePlayer::new(remote_team));
+                state.remote_player = Some(RemotePlayer::new(match team { Team::A => Team::B, Team::B => Team::A }));
             }
         });
     });
 
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new();
-    
     #[allow(clippy::let_underscore_future)]
-    let _ = event_loop.run_app(&mut app);
+    let _ = event_loop.run_app(&mut App::new());
 }
 
-fn main() {
-    run();
-}
+fn main() { run(); }

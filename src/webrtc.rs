@@ -9,472 +9,341 @@ use web_sys::{
 };
 use serde::{Deserialize, Serialize};
 use glam::Vec3;
-use crate::network_player::{Team, PlayerStateMessage};
+use crate::player::{Team, PlayerStateMessage};
 
 const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
+const STUN_SERVERS: &[&str] = &[
+    "stun:ggj26.cheapmo.ch:3478",
+    "stun:stun.l.google.com:19302",
+    "stun:stun1.l.google.com:19302",
+];
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameMessage {
     pub msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub z: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub yaw: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub z: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub yaw: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SignalMessage {
-    #[serde(rename = "type")]
-    msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sdp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    candidate: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMid")]
-    sdp_mid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMLineIndex")]
-    sdp_m_line_index: Option<u16>,
+    #[serde(rename = "type")] msg_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")] sdp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] candidate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMid")] sdp_mid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "sdpMLineIndex")] sdp_m_line_index: Option<u16>,
 }
 
-#[allow(clippy::type_complexity)]
+// Consolidated state struct
+#[derive(Default)]
+struct RtcState {
+    pc: Option<RtcPeerConnection>,
+    data_channel: Option<RtcDataChannel>,
+    local_team: Option<Team>,
+    connected: bool,
+    pending_candidates: Vec<SignalMessage>,
+    on_player_state: Option<Box<dyn Fn(Vec3, f32)>>,
+    on_team_assign: Option<Box<dyn Fn(Team)>>,
+}
+
+type StateRef = Rc<RefCell<RtcState>>;
+
 pub struct WebRtcClient {
-    data_channel: Rc<RefCell<Option<RtcDataChannel>>>,
-    on_player_state: Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
-    on_team_assign: Rc<RefCell<Option<Box<dyn Fn(Team)>>>>,
+    state: StateRef,
 }
 
 impl WebRtcClient {
-    #[allow(clippy::type_complexity)]
     pub fn new() -> Result<Self, JsValue> {
+        let state: StateRef = Rc::new(RefCell::new(RtcState::default()));
         let ws = WebSocket::new(SIGNALING_SERVER)?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
-        
-        let pc: Rc<RefCell<Option<RtcPeerConnection>>> = Rc::new(RefCell::new(None));
-        let data_channel: Rc<RefCell<Option<RtcDataChannel>>> = Rc::new(RefCell::new(None));
-        let on_player_state: Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>> = Rc::new(RefCell::new(None));
-        let on_team_assign: Rc<RefCell<Option<Box<dyn Fn(Team)>>>> = Rc::new(RefCell::new(None));
-        let local_team: Rc<RefCell<Option<Team>>> = Rc::new(RefCell::new(None));
-        let connected = Rc::new(RefCell::new(false));
-        let pending_candidates: Rc<RefCell<Vec<SignalMessage>>> = Rc::new(RefCell::new(Vec::new()));
-        
+
+        // WebSocket open
         let ws_clone = ws.clone();
-        let onopen = Closure::wrap(Box::new(move |_: JsValue| {
+        set_callback(&ws, "onopen", move |_: JsValue| {
             log::info!("Connected to signaling server");
             update_status("Connected to server, waiting for peer...");
-            
-            let msg = serde_json::json!({ "type": "join" });
-            let _ = ws_clone.send_with_str(&msg.to_string());
-        }) as Box<dyn FnMut(JsValue)>);
-        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
-        onopen.forget();
-        
-        let ws_for_msg = ws.clone();
-        let pc_for_msg = pc.clone();
-        let dc_for_msg = data_channel.clone();
-        let on_player_state_for_msg = on_player_state.clone();
-        let on_team_assign_for_msg = on_team_assign.clone();
-        let local_team_for_msg = local_team.clone();
-        let connected_for_msg = connected.clone();
-        let pending_for_msg = pending_candidates.clone();
-        
-        let onmessage = Closure::wrap(Box::new(move |ev: MessageEvent| {
+            let _ = ws_clone.send_with_str(&serde_json::json!({"type": "join"}).to_string());
+        });
+
+        // WebSocket message
+        let state_clone = state.clone();
+        let ws_clone = ws.clone();
+        set_callback(&ws, "onmessage", move |ev: MessageEvent| {
             if let Some(text) = ev.data().as_string() {
                 if let Ok(msg) = serde_json::from_str::<SignalMessage>(&text) {
-                    handle_signal_message(
-                        &ws_for_msg,
-                        &pc_for_msg,
-                        &dc_for_msg,
-                        &on_player_state_for_msg,
-                        &on_team_assign_for_msg,
-                        &local_team_for_msg,
-                        &connected_for_msg,
-                        &pending_for_msg,
-                        msg,
-                    );
+                    handle_signal(&ws_clone, &state_clone, msg);
                 }
             }
-        }) as Box<dyn FnMut(MessageEvent)>);
-        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        onmessage.forget();
-        
-        let onerror = Closure::wrap(Box::new(move |e: JsValue| {
-            log::error!("WebSocket error: {:?}", e);
+        });
+
+        // WebSocket error/close
+        set_callback(&ws, "onerror", |_: JsValue| {
+            log::error!("WebSocket error");
             update_status("Connection error. Is the server running?");
-        }) as Box<dyn FnMut(JsValue)>);
-        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-        onerror.forget();
-        
-        let onclose = Closure::wrap(Box::new(move |_: JsValue| {
+        });
+        set_callback(&ws, "onclose", |_: JsValue| {
             log::info!("WebSocket closed");
             update_status("Disconnected from server");
-        }) as Box<dyn FnMut(JsValue)>);
-        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-        onclose.forget();
-        
-        Ok(Self {
-            data_channel,
-            on_player_state,
-            on_team_assign,
-        })
+        });
+
+        Ok(Self { state })
     }
-    
+
     pub fn send_player_state(&self, position: Vec3, yaw: f32) {
-        if let Some(ref dc) = *self.data_channel.borrow() {
+        let state = self.state.borrow();
+        if let Some(ref dc) = state.data_channel {
             if dc.ready_state() == web_sys::RtcDataChannelState::Open {
-                let msg = PlayerStateMessage::new(position, yaw);
-                if let Ok(json) = serde_json::to_string(&msg) {
+                if let Ok(json) = serde_json::to_string(&PlayerStateMessage::new(position, yaw)) {
                     let _ = dc.send_with_str(&json);
                 }
             }
         }
     }
-    
+
     pub fn set_on_player_state<F: Fn(Vec3, f32) + 'static>(&self, callback: F) {
-        *self.on_player_state.borrow_mut() = Some(Box::new(callback));
+        self.state.borrow_mut().on_player_state = Some(Box::new(callback));
     }
-    
+
     pub fn set_on_team_assign<F: Fn(Team) + 'static>(&self, callback: F) {
-        *self.on_team_assign.borrow_mut() = Some(Box::new(callback));
+        self.state.borrow_mut().on_team_assign = Some(Box::new(callback));
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
-#[allow(clippy::await_holding_refcell_ref)]
-fn handle_signal_message(
-    ws: &WebSocket,
-    pc_cell: &Rc<RefCell<Option<RtcPeerConnection>>>,
-    dc_cell: &Rc<RefCell<Option<RtcDataChannel>>>,
-    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
-    on_team_assign: &Rc<RefCell<Option<Box<dyn Fn(Team)>>>>,
-    local_team: &Rc<RefCell<Option<Team>>>,
-    connected: &Rc<RefCell<bool>>,
-    pending_candidates: &Rc<RefCell<Vec<SignalMessage>>>,
-    msg: SignalMessage,
-) {
+fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
     let ws = ws.clone();
-    let pc_cell = pc_cell.clone();
-    let dc_cell = dc_cell.clone();
-    let on_player_state = on_player_state.clone();
-    let on_team_assign = on_team_assign.clone();
-    let local_team = local_team.clone();
-    let connected = connected.clone();
-    let pending_candidates = pending_candidates.clone();
-    
+    let state = state.clone();
+
     wasm_bindgen_futures::spawn_local(async move {
         match msg.msg_type.as_str() {
-            "waiting" => {
-                update_status("Waiting for another player...");
-            }
+            "waiting" => update_status("Waiting for another player..."),
             "waiting-for-offer" => {
-                // Second player joins - they are Team B
-                *local_team.borrow_mut() = Some(Team::B);
-                if let Some(ref callback) = *on_team_assign.borrow() {
-                    callback(Team::B);
-                }
+                set_team(&state, Team::B);
                 update_status("You are Team B (Red). Waiting for connection...");
             }
             "create-offer" => {
-                log::info!("Creating offer...");
-                // First player (offerer) is Team A
-                *local_team.borrow_mut() = Some(Team::A);
-                if let Some(ref callback) = *on_team_assign.borrow() {
-                    callback(Team::A);
-                }
+                set_team(&state, Team::A);
                 update_status("You are Team A (Blue). Creating connection...");
-                
-                // Create peer connection with STUN
-                if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_player_state, &connected) {
-                    // Store it immediately so ICE candidates can be added
-                    *pc_cell.borrow_mut() = Some(pc.clone());
-                    
-                    // Create data channel
+
+                if let Ok(pc) = create_peer_connection(&ws, &state) {
                     let dc = pc.create_data_channel("game-sync");
-                    setup_data_channel(&dc, &on_player_state, &connected);
-                    *dc_cell.borrow_mut() = Some(dc);
-                    
-                    // Create offer
-                    match wasm_bindgen_futures::JsFuture::from(pc.create_offer()).await {
-                        Ok(offer) => {
-                            let offer_sdp = js_sys::Reflect::get(&offer, &JsValue::from_str("sdp"))
-                                .ok()
-                                .and_then(|v| v.as_string())
-                                .unwrap_or_default();
-                            
-                            let offer_init = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
-                            offer_init.set_sdp(&offer_sdp);
-                            
-                            if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&offer_init)).await.is_ok() {
-                                log::info!("Offer created and set");
-                                let msg = serde_json::json!({
-                                    "type": "offer",
-                                    "sdp": offer_sdp
-                                });
-                                let _ = ws.send_with_str(&msg.to_string());
-                            }
+                    setup_data_channel(&dc, &state);
+                    state.borrow_mut().data_channel = Some(dc);
+                    state.borrow_mut().pc = Some(pc.clone());
+
+                    if let Ok(offer) = wasm_bindgen_futures::JsFuture::from(pc.create_offer()).await {
+                        let sdp = get_sdp(&offer);
+                        let init = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
+                        init.set_sdp(&sdp);
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init)).await.is_ok() {
+                            send_signal(&ws, "offer", Some(&sdp), None);
                         }
-                        Err(e) => log::error!("Failed to create offer: {:?}", e),
                     }
                 }
             }
             "offer" => {
-                log::info!("Received offer");
-                update_status("Received offer, creating answer...");
-                
                 if let Some(sdp) = msg.sdp {
-                    // Create peer connection with STUN
-                    if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_player_state, &connected) {
-                        // Store it immediately
-                        *pc_cell.borrow_mut() = Some(pc.clone());
-                        
-                        // Set remote description
-                        let remote_desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
-                        remote_desc.set_sdp(&sdp);
-                        
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&remote_desc)).await.is_ok() {
-                            log::info!("Remote description set");
-                            
-                            // Add any pending ICE candidates
-                            for pending in pending_candidates.borrow().iter() {
-                                if let Some(ref candidate_str) = pending.candidate {
-                                    add_ice_candidate(&pc, candidate_str, &pending.sdp_mid, pending.sdp_m_line_index).await;
-                                }
-                            }
-                            pending_candidates.borrow_mut().clear();
-                            
-                            // Create answer
+                    if let Ok(pc) = create_peer_connection(&ws, &state) {
+                        state.borrow_mut().pc = Some(pc.clone());
+
+                        let desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
+                        desc.set_sdp(&sdp);
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc)).await.is_ok() {
+                            apply_pending_candidates(&pc, &state).await;
+
                             if let Ok(answer) = wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await {
-                                let answer_sdp = js_sys::Reflect::get(&answer, &JsValue::from_str("sdp"))
-                                    .ok()
-                                    .and_then(|v| v.as_string())
-                                    .unwrap_or_default();
-                                
-                                let answer_init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-                                answer_init.set_sdp(&answer_sdp);
-                                
-                                if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&answer_init)).await.is_ok() {
-                                    log::info!("Answer created and set");
-                                    update_status("Answer sent, connecting...");
-                                    let msg = serde_json::json!({
-                                        "type": "answer",
-                                        "sdp": answer_sdp
-                                    });
-                                    let _ = ws.send_with_str(&msg.to_string());
+                                let answer_sdp = get_sdp(&answer);
+                                let init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+                                init.set_sdp(&answer_sdp);
+                                if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init)).await.is_ok() {
+                                    send_signal(&ws, "answer", Some(&answer_sdp), None);
                                 }
                             }
-                        } else {
-                            log::error!("Failed to set remote description");
                         }
                     }
                 }
             }
             "answer" => {
-                log::info!("Received answer");
-                update_status("Answer received, connecting...");
-                
                 if let Some(sdp) = msg.sdp {
-                    if let Some(ref pc) = *pc_cell.borrow() {
-                        let remote_desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-                        remote_desc.set_sdp(&sdp);
-                        
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&remote_desc)).await.is_ok() {
-                            log::info!("Remote answer set");
-                            
-                            // Add any pending ICE candidates
-                            for pending in pending_candidates.borrow().iter() {
-                                if let Some(ref candidate_str) = pending.candidate {
-                                    add_ice_candidate(pc, candidate_str, &pending.sdp_mid, pending.sdp_m_line_index).await;
-                                }
-                            }
-                            pending_candidates.borrow_mut().clear();
+                    let state_ref = state.borrow();
+                    if let Some(ref pc) = state_ref.pc {
+                        let pc = pc.clone();
+                        drop(state_ref);
+                        let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+                        desc.set_sdp(&sdp);
+                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc)).await.is_ok() {
+                            apply_pending_candidates(&pc, &state).await;
                         }
                     }
                 }
             }
             "ice-candidate" => {
-                if let Some(ref candidate_str) = msg.candidate {
-                    if let Some(ref pc) = *pc_cell.borrow() {
-                        // Check if we have a remote description set
-                        if pc.remote_description().is_some() {
-                            add_ice_candidate(pc, candidate_str, &msg.sdp_mid, msg.sdp_m_line_index).await;
-                        } else {
-                            // Buffer the candidate for later
-                            log::info!("Buffering ICE candidate");
-                            pending_candidates.borrow_mut().push(msg);
+                if msg.candidate.is_some() {
+                    let has_remote = state.borrow().pc.as_ref().map(|pc| pc.remote_description().is_some()).unwrap_or(false);
+                    if has_remote {
+                        if let Some(ref pc) = state.borrow().pc {
+                            add_ice_candidate(pc, &msg).await;
                         }
                     } else {
-                        // Buffer the candidate for later
-                        log::info!("Buffering ICE candidate (no PC yet)");
-                        pending_candidates.borrow_mut().push(msg);
+                        state.borrow_mut().pending_candidates.push(msg);
                     }
                 }
             }
             "peer-disconnected" => {
                 update_status("Peer disconnected. Refresh to reconnect.");
-                *connected.borrow_mut() = false;
+                state.borrow_mut().connected = false;
             }
             _ => {}
         }
     });
 }
 
-async fn add_ice_candidate(pc: &RtcPeerConnection, candidate: &str, sdp_mid: &Option<String>, sdp_m_line_index: Option<u16>) {
-    let init = RtcIceCandidateInit::new(candidate);
-    if let Some(ref mid) = sdp_mid {
-        init.set_sdp_mid(Some(mid));
-    }
-    if let Some(idx) = sdp_m_line_index {
-        init.set_sdp_m_line_index(Some(idx));
-    }
-    
-    if let Ok(ice_candidate) = RtcIceCandidate::new(&init) {
-        match wasm_bindgen_futures::JsFuture::from(
-            pc.add_ice_candidate_with_opt_rtc_ice_candidate(Some(&ice_candidate))
-        ).await {
-            Ok(_) => log::info!("Added ICE candidate"),
-            Err(e) => log::error!("Failed to add ICE candidate: {:?}", e),
-        }
+fn set_team(state: &StateRef, team: Team) {
+    let mut s = state.borrow_mut();
+    s.local_team = Some(team);
+    if let Some(ref cb) = s.on_team_assign {
+        cb(team);
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn create_peer_connection(
-    ws: &WebSocket,
-    dc_cell: &Rc<RefCell<Option<RtcDataChannel>>>,
-    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
-    connected: &Rc<RefCell<bool>>,
-) -> Result<RtcPeerConnection, JsValue> {
-    // Configure with STUN servers for NAT traversal
+fn create_peer_connection(ws: &WebSocket, state: &StateRef) -> Result<RtcPeerConnection, JsValue> {
     let config = RtcConfiguration::new();
     let ice_servers = js_sys::Array::new();
-    
-    // STUN servers (including our own + Google fallbacks)
-    let stun_urls = js_sys::Array::new();
-    stun_urls.push(&"stun:ggj26.cheapmo.ch:3478".into());  // Our own STUN server
-    stun_urls.push(&"stun:stun.l.google.com:19302".into());
-    stun_urls.push(&"stun:stun1.l.google.com:19302".into());
-    stun_urls.push(&"stun:stun2.l.google.com:19302".into());
-    
-    let stun_server = js_sys::Object::new();
-    js_sys::Reflect::set(&stun_server, &"urls".into(), &stun_urls)?;
-    ice_servers.push(&stun_server);
-    
+    let urls = js_sys::Array::new();
+    for url in STUN_SERVERS { urls.push(&(*url).into()); }
+    let server = js_sys::Object::new();
+    js_sys::Reflect::set(&server, &"urls".into(), &urls)?;
+    ice_servers.push(&server);
     config.set_ice_servers(&ice_servers);
-    
+
     let pc = RtcPeerConnection::new_with_configuration(&config)?;
-    
-    // ICE candidate handler
+
+    // ICE candidate
     let ws_clone = ws.clone();
     let onicecandidate = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcPeerConnectionIceEvent = ev.unchecked_into();
-        if let Some(candidate) = ev.candidate() {
-            log::info!("Sending ICE candidate");
+        if let Some(c) = ev.candidate() {
             let msg = serde_json::json!({
                 "type": "ice-candidate",
-                "candidate": candidate.candidate(),
-                "sdpMid": candidate.sdp_mid(),
-                "sdpMLineIndex": candidate.sdp_m_line_index()
+                "candidate": c.candidate(),
+                "sdpMid": c.sdp_mid(),
+                "sdpMLineIndex": c.sdp_m_line_index()
             });
             let _ = ws_clone.send_with_str(&msg.to_string());
         }
     }) as Box<dyn FnMut(JsValue)>);
     pc.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
     onicecandidate.forget();
-    
-    // ICE connection state change handler
-    let connected_for_ice = connected.clone();
-    let oniceconnectionstatechange = Closure::wrap(Box::new(move |ev: JsValue| {
+
+    // ICE state change
+    let state_clone = state.clone();
+    let onice = Closure::wrap(Box::new(move |ev: JsValue| {
         if let Some(pc) = ev.dyn_ref::<RtcPeerConnection>() {
-            let state = pc.ice_connection_state();
-            log::info!("ICE connection state: {:?}", state);
-            match state {
-                web_sys::RtcIceConnectionState::Connected => {
-                    *connected_for_ice.borrow_mut() = true;
-                }
-                web_sys::RtcIceConnectionState::Failed => {
-                    update_status("Connection failed. Try refreshing.");
-                }
-                web_sys::RtcIceConnectionState::Disconnected => {
-                    update_status("Connection lost.");
-                }
+            match pc.ice_connection_state() {
+                web_sys::RtcIceConnectionState::Connected => state_clone.borrow_mut().connected = true,
+                web_sys::RtcIceConnectionState::Failed => update_status("Connection failed."),
+                web_sys::RtcIceConnectionState::Disconnected => update_status("Connection lost."),
                 _ => {}
             }
         }
     }) as Box<dyn FnMut(JsValue)>);
-    pc.set_oniceconnectionstatechange(Some(oniceconnectionstatechange.as_ref().unchecked_ref()));
-    oniceconnectionstatechange.forget();
-    
-    // Data channel handler (for answerer)
-    let dc_cell_clone = dc_cell.clone();
-    let on_player_state_clone = on_player_state.clone();
-    let connected_clone = connected.clone();
-    let ondatachannel = Closure::wrap(Box::new(move |ev: JsValue| {
+    pc.set_oniceconnectionstatechange(Some(onice.as_ref().unchecked_ref()));
+    onice.forget();
+
+    // Data channel (for answerer)
+    let state_clone = state.clone();
+    let ondc = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcDataChannelEvent = ev.unchecked_into();
         let dc = ev.channel();
-        log::info!("Received data channel: {}", dc.label());
-        
-        setup_data_channel(&dc, &on_player_state_clone, &connected_clone);
-        *dc_cell_clone.borrow_mut() = Some(dc);
+        setup_data_channel(&dc, &state_clone);
+        state_clone.borrow_mut().data_channel = Some(dc);
     }) as Box<dyn FnMut(JsValue)>);
-    pc.set_ondatachannel(Some(ondatachannel.as_ref().unchecked_ref()));
-    ondatachannel.forget();
-    
+    pc.set_ondatachannel(Some(ondc.as_ref().unchecked_ref()));
+    ondc.forget();
+
     Ok(pc)
 }
 
-#[allow(clippy::type_complexity)]
-fn setup_data_channel(
-    dc: &RtcDataChannel,
-    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
-    connected: &Rc<RefCell<bool>>,
-) {
-    let connected_clone = connected.clone();
+fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef) {
+    let state_clone = state.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
-        log::info!("Data channel opened!");
-        *connected_clone.borrow_mut() = true;
+        state_clone.borrow_mut().connected = true;
         update_status("Connected! Both players ready.");
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
-    
-    let onclose = Closure::wrap(Box::new(move |_: JsValue| {
-        log::info!("Data channel closed");
-    }) as Box<dyn FnMut(JsValue)>);
-    dc.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-    onclose.forget();
-    
-    let on_player_state_clone = on_player_state.clone();
-    let onmessage = Closure::wrap(Box::new(move |ev: JsValue| {
+
+    let state_clone = state.clone();
+    let onmsg = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: MessageEvent = ev.unchecked_into();
         if let Some(data) = ev.data().as_string() {
             if let Ok(msg) = serde_json::from_str::<GameMessage>(&data) {
                 if msg.msg_type == "player_state" {
                     if let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw) {
-                        if let Some(ref callback) = *on_player_state_clone.borrow() {
-                            callback(Vec3::new(x, y, z), yaw);
+                        if let Some(ref cb) = state_clone.borrow().on_player_state {
+                            cb(Vec3::new(x, y, z), yaw);
                         }
                     }
                 }
             }
         }
     }) as Box<dyn FnMut(JsValue)>);
-    dc.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-    onmessage.forget();
+    dc.set_onmessage(Some(onmsg.as_ref().unchecked_ref()));
+    onmsg.forget();
+}
+
+async fn apply_pending_candidates(pc: &RtcPeerConnection, state: &StateRef) {
+    let pending: Vec<_> = state.borrow_mut().pending_candidates.drain(..).collect();
+    for msg in pending {
+        add_ice_candidate(pc, &msg).await;
+    }
+}
+
+async fn add_ice_candidate(pc: &RtcPeerConnection, msg: &SignalMessage) {
+    if let Some(ref candidate) = msg.candidate {
+        let init = RtcIceCandidateInit::new(candidate);
+        if let Some(ref mid) = msg.sdp_mid { init.set_sdp_mid(Some(mid)); }
+        if let Some(idx) = msg.sdp_m_line_index { init.set_sdp_m_line_index(Some(idx)); }
+        if let Ok(ice) = RtcIceCandidate::new(&init) {
+            let _ = wasm_bindgen_futures::JsFuture::from(
+                pc.add_ice_candidate_with_opt_rtc_ice_candidate(Some(&ice))
+            ).await;
+        }
+    }
+}
+
+fn get_sdp(js: &JsValue) -> String {
+    js_sys::Reflect::get(js, &"sdp".into()).ok().and_then(|v| v.as_string()).unwrap_or_default()
+}
+
+fn send_signal(ws: &WebSocket, msg_type: &str, sdp: Option<&str>, _: Option<()>) {
+    let mut msg = serde_json::json!({"type": msg_type});
+    if let Some(s) = sdp { msg["sdp"] = serde_json::Value::String(s.to_string()); }
+    let _ = ws.send_with_str(&msg.to_string());
+}
+
+fn set_callback<T: wasm_bindgen::convert::FromWasmAbi + 'static, F: FnMut(T) + 'static>(
+    ws: &WebSocket, event: &str, mut f: F
+) {
+    let closure = Closure::wrap(Box::new(move |e: T| f(e)) as Box<dyn FnMut(T)>);
+    match event {
+        "onopen" => ws.set_onopen(Some(closure.as_ref().unchecked_ref())),
+        "onmessage" => ws.set_onmessage(Some(closure.as_ref().unchecked_ref())),
+        "onerror" => ws.set_onerror(Some(closure.as_ref().unchecked_ref())),
+        "onclose" => ws.set_onclose(Some(closure.as_ref().unchecked_ref())),
+        _ => {}
+    }
+    closure.forget();
 }
 
 fn update_status(status: &str) {
-    if let Some(window) = web_sys::window() {
-        if let Some(document) = window.document() {
-            if let Some(elem) = document.get_element_by_id("connection-status") {
-                elem.set_text_content(Some(status));
-            }
-        }
+    if let Some(elem) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("connection-status"))
+    {
+        elem.set_text_content(Some(status));
     }
 }
 
@@ -484,11 +353,7 @@ thread_local! {
 
 pub fn init_webrtc_client() {
     match WebRtcClient::new() {
-        Ok(client) => {
-            WEBRTC_CLIENT.with(|c| {
-                *c.borrow_mut() = Some(client);
-            });
-        }
+        Ok(client) => WEBRTC_CLIENT.with(|c| *c.borrow_mut() = Some(client)),
         Err(e) => {
             log::error!("Failed to create WebRTC client: {:?}", e);
             update_status("Failed to connect to server");
@@ -498,24 +363,18 @@ pub fn init_webrtc_client() {
 
 pub fn send_player_state_to_peer(position: Vec3, yaw: f32) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.send_player_state(position, yaw);
-        }
+        if let Some(ref client) = *c.borrow() { client.send_player_state(position, yaw); }
     });
 }
 
 pub fn set_player_state_callback<F: Fn(Vec3, f32) + 'static>(callback: F) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_player_state(callback);
-        }
+        if let Some(ref client) = *c.borrow() { client.set_on_player_state(callback); }
     });
 }
 
 pub fn set_team_assign_callback<F: Fn(Team) + 'static>(callback: F) {
     WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_team_assign(callback);
-        }
+        if let Some(ref client) = *c.borrow() { client.set_on_team_assign(callback); }
     });
 }
