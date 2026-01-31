@@ -671,13 +671,13 @@ fn update_coordinates_display(pos: Vec3) {
 
 fn update_remote_coordinates_display(pos: Option<Vec3>) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        if let Some(container) = doc.get_element_by_id("remote-coords") {
-            if let Some(html_elem) = container.dyn_ref::<web_sys::HtmlElement>() {
-                if pos.is_some() {
-                    let _ = html_elem.style().set_property("display", "block");
-                } else {
-                    let _ = html_elem.style().set_property("display", "none");
-                }
+        if let Some(container) = doc.get_element_by_id("remote-coords")
+            && let Some(html_elem) = container.dyn_ref::<web_sys::HtmlElement>()
+        {
+            if pos.is_some() {
+                let _ = html_elem.style().set_property("display", "block");
+            } else {
+                let _ = html_elem.style().set_property("display", "none");
             }
         }
         if let Some(pos) = pos {

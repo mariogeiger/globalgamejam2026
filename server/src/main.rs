@@ -49,8 +49,14 @@ fn run_http_server(port: u16) {
         match fs::read(&file_path) {
             Ok(content) => {
                 let content_type = get_content_type(&file_path);
-                let header = Header::from_bytes("Content-Type", content_type).unwrap();
-                let response = Response::from_data(content).with_header(header);
+                let response = Response::from_data(content)
+                    .with_header(Header::from_bytes("Content-Type", content_type).unwrap())
+                    .with_header(
+                        Header::from_bytes("Cross-Origin-Opener-Policy", "same-origin").unwrap(),
+                    )
+                    .with_header(
+                        Header::from_bytes("Cross-Origin-Embedder-Policy", "require-corp").unwrap(),
+                    );
                 let _ = request.respond(response);
             }
             Err(_) => {
@@ -62,7 +68,7 @@ fn run_http_server(port: u16) {
 }
 
 fn get_file_path(url_path: &str) -> String {
-    let dist_dir = "dist";
+    let dist_dir = "../client/dist";
 
     let clean_path = url_path.trim_start_matches('/');
     let clean_path = clean_path.split('?').next().unwrap_or(clean_path);
