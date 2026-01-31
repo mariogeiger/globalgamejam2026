@@ -14,9 +14,9 @@ glam = "*"
 web-time = "*"
 gltf = "*"
 image = { version = "*", default-features = false, features = ["png", "jpeg"] }
-rapier3d = { version = "*", features = ["wasm-bindgen"] }
-rand = { version = "0.8", features = ["small_rng"] }
-getrandom = { version = "0.2", features = ["js"] }
+parry3d = "*"
+rand = { version = "*", features = ["small_rng"] }
+getrandom = { version = "*", features = ["js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_log = "*"
