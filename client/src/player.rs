@@ -104,29 +104,22 @@ impl Player {
 
         let move_dir = move_dir.normalize_or_zero();
 
-        if self.on_ground {
-            self.velocity.x = move_dir.x * MOVE_SPEED;
-            self.velocity.z = move_dir.z * MOVE_SPEED;
-            if self.pressed_keys.contains(&KeyCode::Space) {
-                self.velocity.y = JUMP_VELOCITY;
-                self.on_ground = false;
-            }
-        } else {
-            self.velocity.x += move_dir.x * MOVE_SPEED * 0.1 * dt;
-            self.velocity.z += move_dir.z * MOVE_SPEED * 0.1 * dt;
+        // Full air control - same movement on ground and in air
+        self.velocity.x = move_dir.x * MOVE_SPEED;
+        self.velocity.z = move_dir.z * MOVE_SPEED;
+
+        // Jump
+        if self.on_ground && self.pressed_keys.contains(&KeyCode::Space) {
+            self.velocity.y = JUMP_VELOCITY;
+            self.on_ground = false;
         }
 
+        // Gravity
         if !self.on_ground {
             self.velocity.y -= GRAVITY * dt;
         }
 
         self.position += self.velocity * dt;
-
-        if self.on_ground {
-            let friction = (1.0 - FRICTION * dt).max(0.0);
-            self.velocity.x *= friction;
-            self.velocity.z *= friction;
-        }
     }
 
     pub fn view_matrix(&self) -> Mat4 {

@@ -34,15 +34,15 @@ impl PhysicsWorld {
             .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
     }
 
-    pub fn move_player(&self, desired_position: Vec3, velocity_y: f32) -> (Vec3, bool, bool) {
+    pub fn move_player(&self, desired_position: Vec3, velocity: Vec3) -> (Vec3, bool) {
         let mut final_pos = desired_position;
         let mut on_ground = false;
-        let mut hit_ceiling = false;
+        let half_width = PLAYER_WIDTH / 2.0;
 
         // Ground check
-        let ground_origin = desired_position + Vec3::new(0.0, GROUND_CHECK_OFFSET, 0.0);
-        if let Some(toi) = self.cast_ray(ground_origin, Vec3::NEG_Y, GROUND_CHECK_MAX)
-            && toi < GROUND_HIT_THRESHOLD
+        let ground_origin = desired_position + Vec3::new(0.0, STEP_OVER_HEIGHT, 0.0);
+        if let Some(toi) = self.cast_ray(ground_origin, Vec3::NEG_Y, PLAYER_HEIGHT)
+            && toi < STEP_OVER_HEIGHT + GROUND_SNAP_MARGIN
         {
             on_ground = true;
             let ground_y = ground_origin.y - toi;
@@ -51,32 +51,31 @@ impl PhysicsWorld {
             }
         }
 
-        // Ceiling check (only when moving up)
-        if velocity_y > 0.0 {
-            let ceiling_origin = desired_position + Vec3::new(0.0, CEILING_CHECK_OFFSET, 0.0);
-            if let Some(toi) = self.cast_ray(ceiling_origin, Vec3::Y, CEILING_CHECK_MAX)
-                && toi < CEILING_HIT_THRESHOLD
-            {
-                hit_ceiling = true;
-                let ceiling_y = ceiling_origin.y + toi - PLAYER_HEIGHT - 1.0;
-                if final_pos.y > ceiling_y {
-                    final_pos.y = ceiling_y;
+        // Wall checks (4 directions, 2 heights: step-over and head)
+        for height in [STEP_OVER_HEIGHT, PLAYER_HEIGHT] {
+            let wall_origin = final_pos + Vec3::new(0.0, height, 0.0);
+            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let dir = Vec3::new(dx, 0.0, dz);
+                if let Some(toi) = self.cast_ray(wall_origin, dir, half_width)
+                    && toi < half_width
+                {
+                    final_pos.x -= dx * (half_width - toi);
+                    final_pos.z -= dz * (half_width - toi);
                 }
             }
         }
 
-        // Wall checks (4 cardinal directions)
-        let wall_origin = desired_position + Vec3::new(0.0, WALL_CHECK_OFFSET, 0.0);
-        for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-            let dir = Vec3::new(dx, 0.0, dz);
-            if let Some(toi) = self.cast_ray(wall_origin, dir, WALL_CHECK_DIST)
-                && toi < WALL_CHECK_DIST
+        // Ceiling check (from eye position, only when moving up)
+        if velocity.y > 0.0 {
+            let head_clearance = PLAYER_HEIGHT - EYE_HEIGHT;
+            let eye_origin = desired_position + Vec3::new(0.0, EYE_HEIGHT, 0.0);
+            if let Some(toi) = self.cast_ray(eye_origin, Vec3::Y, head_clearance)
+                && toi < head_clearance
             {
-                final_pos.x -= dx * (WALL_CHECK_DIST - toi);
-                final_pos.z -= dz * (WALL_CHECK_DIST - toi);
+                final_pos.y -= head_clearance - toi;
             }
         }
 
-        (final_pos, on_ground, hit_ceiling)
+        (final_pos, on_ground)
     }
 }

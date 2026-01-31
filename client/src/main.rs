@@ -382,13 +382,10 @@ impl GpuState {
         self.player.update(dt);
 
         if let Some(ref physics) = self.physics {
-            let (new_pos, on_ground, hit_ceiling) =
-                physics.move_player(self.player.position, self.player.velocity.y);
+            let (new_pos, on_ground) =
+                physics.move_player(self.player.position, self.player.velocity);
             self.player.position = new_pos;
             self.player.set_on_ground(on_ground, None);
-            if hit_ceiling {
-                self.player.velocity.y = 0.0;
-            }
         }
 
         if let Some((bounds_min, bounds_max)) = self.map_bounds {
