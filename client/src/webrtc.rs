@@ -11,7 +11,7 @@ use web_sys::{
     RtcSessionDescriptionInit, WebSocket,
 };
 
-const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
+const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch/ws";
 const STUN_SERVERS: &[&str] = &[
     "stun:ggj26.cheapmo.ch:3478",
     "stun:stun.l.google.com:19302",
