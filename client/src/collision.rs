@@ -34,6 +34,21 @@ impl PhysicsWorld {
             .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
     }
 
+    /// Check if there's a clear line of sight between two points.
+    /// Returns true if visible (no obstruction), false if blocked.
+    pub fn is_visible(&self, from: Vec3, to: Vec3) -> bool {
+        let dir = to - from;
+        let distance = dir.length();
+        if distance < 0.001 {
+            return true;
+        }
+        let dir_normalized = dir / distance;
+        match self.cast_ray(from, dir_normalized, distance) {
+            Some(hit_dist) => hit_dist >= distance - 1.0, // small tolerance
+            None => true,
+        }
+    }
+
     pub fn move_player(&self, desired_position: Vec3, velocity: Vec3) -> (Vec3, bool) {
         let mut final_pos = desired_position;
         let mut on_ground = false;

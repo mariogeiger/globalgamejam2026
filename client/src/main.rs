@@ -22,15 +22,17 @@ mod player;
 mod webrtc;
 
 use collision::PhysicsWorld;
-use config::RESPAWN_MARGIN;
+use config::{
+    EYE_HEIGHT, PLAYER_HEIGHT, RESPAWN_DELAY, RESPAWN_MARGIN, TARGETING_ANGLE, TARGETING_DURATION,
+};
 use glb::load_glb_from_bytes;
 use gpu::{
     camera_bind_group_layout, create_depth_texture, create_index_buffer,
     create_placeholder_bind_group, create_texture_with_bind_group, create_uniform_buffer,
-    create_vertex_buffer, texture_bind_group_layout, uniform_bind_group_layout,
+    create_vertex_buffer, texture_bind_group_layout,
 };
 use map::{LoadedMap, MapVertex};
-use player::{Player, PlayerUniform, PlayerVertex, RemotePlayer, Team, generate_player_box};
+use player::{Player, PlayerRenderer, RemotePlayer, Team};
 
 const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
 
@@ -44,15 +46,6 @@ struct MapRenderData {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
-    bind_group: wgpu::BindGroup,
-}
-
-struct PlayerRenderData {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
-    pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
 
@@ -75,7 +68,7 @@ struct GpuState {
     map_bounds: (Vec3, Vec3),
     local_team: Option<Team>,
     remote_players: HashMap<u64, RemotePlayer>,
-    player_render: PlayerRenderData,
+    player_renderer: PlayerRenderer,
 }
 
 impl GpuState {
@@ -249,80 +242,20 @@ impl GpuState {
         let spawn_points = loaded_map.spawn_points;
         let map_bounds = (loaded_map.bounds_min, loaded_map.bounds_max);
 
-        let player_render = {
-            let player_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Player Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("player.wgsl").into()),
-            });
+        let player_renderer = PlayerRenderer::new(&device, &camera_layout, config.format);
 
-            let player_uniform_layout = uniform_bind_group_layout(&device, "Player Uniform Layout");
-            let player_pipeline_layout =
-                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Player Pipeline Layout"),
-                    bind_group_layouts: &[&camera_layout, &player_uniform_layout],
-                    immediate_size: 0,
-                });
-
-            let player_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Player Render Pipeline"),
-                layout: Some(&player_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &player_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[PlayerVertex::desc()],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &player_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-
-            let (vertices, indices) = generate_player_box();
-            let uniform = PlayerUniform {
-                model: Mat4::IDENTITY.to_cols_array_2d(),
-                color: [1.0, 0.0, 0.0, 1.0],
-            };
-            let uniform_buffer = create_uniform_buffer(&device, &uniform, "Player Uniform");
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Player Bind Group"),
-                layout: &player_uniform_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                }],
-            });
-
-            PlayerRenderData {
-                vertex_buffer: create_vertex_buffer(&device, &vertices, "Player Vertex"),
-                index_buffer: create_index_buffer(&device, &indices, "Player Index"),
-                index_count: indices.len() as u32,
-                pipeline: player_pipeline,
-                uniform_buffer,
-                bind_group,
-            }
-        };
+        // Create debug mannequins for testing (one per team at their spawn points)
+        let mut remote_players = HashMap::new();
+        let mannequin_a = RemotePlayer::new(Team::A);
+        let mannequin_b = RemotePlayer::new(Team::B);
+        log::info!(
+            "Creating mannequins - A at {:?}, B at {:?}, player at {:?}",
+            mannequin_a.position,
+            mannequin_b.position,
+            initial_spawn
+        );
+        remote_players.insert(u64::MAX, mannequin_a);
+        remote_players.insert(u64::MAX - 1, mannequin_b);
 
         Self {
             window,
@@ -342,8 +275,8 @@ impl GpuState {
             spawn_points,
             map_bounds,
             local_team: None,
-            remote_players: HashMap::new(),
-            player_render,
+            remote_players,
+            player_renderer,
         }
     }
 
@@ -398,6 +331,61 @@ impl GpuState {
 
         if self.local_team.is_some() {
             webrtc::send_player_state_to_peers(self.player.position, self.player.yaw);
+        }
+
+        // Targeting system: kill enemies that stay in view cone for TARGETING_DURATION
+        let eye_pos = self.player.position + Vec3::new(0.0, EYE_HEIGHT, 0.0);
+        let look_dir = Vec3::new(
+            self.player.yaw.sin() * self.player.pitch.cos(),
+            self.player.pitch.sin(),
+            -self.player.yaw.cos() * self.player.pitch.cos(),
+        )
+        .normalize();
+        let half_angle_rad = (TARGETING_ANGLE / 2.0).to_radians();
+
+        for remote in self.remote_players.values_mut() {
+            // Handle dead players - respawn after delay
+            if !remote.is_alive {
+                remote.dead_time += dt;
+                if remote.dead_time >= RESPAWN_DELAY {
+                    remote.respawn();
+                    log::info!("Enemy respawned!");
+                }
+                continue;
+            }
+
+            // Skip teammates for targeting
+            if let Some(local_team) = self.local_team
+                && remote.team == local_team
+            {
+                remote.targeted_time = 0.0;
+                continue;
+            }
+
+            // Calculate angle to enemy (aim at center mass)
+            let enemy_center = remote.position + Vec3::new(0.0, PLAYER_HEIGHT / 2.0, 0.0);
+            let to_enemy = enemy_center - eye_pos;
+            let distance = to_enemy.length();
+
+            if distance < 1.0 {
+                remote.targeted_time = 0.0;
+                continue;
+            }
+
+            let to_enemy_normalized = to_enemy / distance;
+            let dot = look_dir.dot(to_enemy_normalized).clamp(-1.0, 1.0);
+            let angle = dot.acos();
+
+            // Check if enemy is within targeting cone and visible
+            if angle < half_angle_rad && self.physics.is_visible(eye_pos, enemy_center) {
+                remote.targeted_time += dt;
+                if remote.targeted_time >= TARGETING_DURATION {
+                    remote.is_alive = false;
+                    log::info!("Enemy killed!");
+                }
+            } else {
+                remote.targeted_time = 0.0;
+            }
         }
 
         update_coordinates_display(self.player.position);
@@ -469,22 +457,27 @@ impl GpuState {
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
 
-            let pr = &self.player_render;
-            pass.set_pipeline(&pr.pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, pr.vertex_buffer.slice(..));
-            pass.set_index_buffer(pr.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            // Collect player render data
+            let players: Vec<_> = self
+                .remote_players
+                .values()
+                .map(|remote| {
+                    let color = if remote.is_alive {
+                        remote.team.color()
+                    } else {
+                        [0.1, 0.1, 0.1, 1.0]
+                    };
+                    (remote.model_matrix(), color)
+                })
+                .collect();
 
-            for remote in self.remote_players.values() {
-                let uniform = PlayerUniform {
-                    model: remote.model_matrix().to_cols_array_2d(),
-                    color: remote.team.color(),
-                };
-                self.queue
-                    .write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
-                pass.set_bind_group(1, &pr.bind_group, &[]);
-                pass.draw_indexed(0..pr.index_count, 0, 0..1);
-            }
+            self.player_renderer.render(
+                &mut pass,
+                &self.queue,
+                &self.device,
+                &self.camera_bind_group,
+                &players,
+            );
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -736,9 +729,8 @@ pub fn run() {
         GPU_STATE.with(|s| {
             let mut guard = s.borrow_mut();
             let Some(state) = guard.as_mut() else { return };
-            state
-                .remote_players
-                .insert(peer_id, RemotePlayer::new(team));
+            let remote = RemotePlayer::new(team);
+            state.remote_players.insert(peer_id, remote);
             update_team_counts_display(state.local_team, &state.remote_players);
         });
     });

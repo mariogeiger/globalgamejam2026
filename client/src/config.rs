@@ -17,3 +17,8 @@ pub const JUMP_VELOCITY: f32 = 4.0 * JUMP_HEIGHT / JUMP_DURATION;
 
 // Map
 pub const RESPAWN_MARGIN: f32 = 500.0;
+
+// Targeting system
+pub const TARGETING_ANGLE: f32 = 60.0; // degrees - full cone angle
+pub const TARGETING_DURATION: f32 = 1.0; // seconds to kill
+pub const RESPAWN_DELAY: f32 = 10.0; // seconds before respawning after death

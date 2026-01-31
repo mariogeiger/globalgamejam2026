@@ -1,8 +1,12 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use wgpu::util::DeviceExt;
 use winit::keyboard::KeyCode;
+
+use crate::gpu::uniform_bind_group_layout;
 
 use crate::config::*;
 use crate::glb::{SPAWNS_TEAM_A, SPAWNS_TEAM_B};
@@ -154,21 +158,39 @@ impl Player {
 
 // === Remote Player ===
 
-#[derive(Clone, Debug)]
 pub struct RemotePlayer {
     pub position: Vec3,
     pub yaw: f32,
     pub team: Team,
+    pub is_alive: bool,
+    pub targeted_time: f32,
+    pub dead_time: f32,
 }
 
 impl RemotePlayer {
     pub fn new(team: Team) -> Self {
-        let spawn = team.spawn_points()[0];
+        let spawns = team.spawn_points();
+        let idx = rand::rng().random_range(0..spawns.len());
+        let spawn = spawns[idx];
+
         Self {
             position: Vec3::new(spawn[0], spawn[1], spawn[2]),
             yaw: 0.0,
             team,
+            is_alive: true,
+            targeted_time: 0.0,
+            dead_time: 0.0,
         }
+    }
+
+    pub fn respawn(&mut self) {
+        let spawns = self.team.spawn_points();
+        let idx = rand::rng().random_range(0..spawns.len());
+        let spawn = spawns[idx];
+        self.position = Vec3::new(spawn[0], spawn[1], spawn[2]);
+        self.is_alive = true;
+        self.targeted_time = 0.0;
+        self.dead_time = 0.0;
     }
 
     pub fn model_matrix(&self) -> Mat4 {
@@ -404,4 +426,149 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
     indices.extend_from_slice(&[base, base + 1, base + 2]);
 
     (vertices, indices)
+}
+
+// === Player Renderer ===
+
+pub struct PlayerRenderer {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    pipeline: wgpu::RenderPipeline,
+    uniform_layout: wgpu::BindGroupLayout,
+    uniform_pool: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+}
+
+impl PlayerRenderer {
+    pub fn new(
+        device: &wgpu::Device,
+        camera_layout: &wgpu::BindGroupLayout,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Player Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("player.wgsl").into()),
+        });
+
+        let uniform_layout = uniform_bind_group_layout(device, "Player Uniform Layout");
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Player Pipeline Layout"),
+            bind_group_layouts: &[camera_layout, &uniform_layout],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Player Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[PlayerVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let (vertices, indices) = generate_player_box();
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Player Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Player Index Buffer"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+            pipeline,
+            uniform_layout,
+            uniform_pool: Vec::new(),
+        }
+    }
+
+    fn ensure_pool_size(&mut self, device: &wgpu::Device, count: usize) {
+        while self.uniform_pool.len() < count {
+            let uniform = PlayerUniform {
+                model: Mat4::IDENTITY.to_cols_array_2d(),
+                color: [1.0, 1.0, 1.0, 1.0],
+            };
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Player Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Player Bind Group"),
+                layout: &self.uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.uniform_pool.push((buffer, bind_group));
+        }
+    }
+
+    pub fn render<'a>(
+        &'a mut self,
+        pass: &mut wgpu::RenderPass<'a>,
+        queue: &wgpu::Queue,
+        device: &wgpu::Device,
+        camera_bind_group: &'a wgpu::BindGroup,
+        players: &[(Mat4, [f32; 4])],
+    ) {
+        if players.is_empty() {
+            return;
+        }
+
+        self.ensure_pool_size(device, players.len());
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, camera_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        for (i, (model, color)) in players.iter().enumerate() {
+            let uniform = PlayerUniform {
+                model: model.to_cols_array_2d(),
+                color: *color,
+            };
+            let (buffer, bind_group) = &self.uniform_pool[i];
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[uniform]));
+            pass.set_bind_group(1, bind_group, &[]);
+            pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+    }
 }
