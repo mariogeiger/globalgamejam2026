@@ -1,13 +1,23 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use instant::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, WindowEvent, DeviceEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowId, CursorGrabMode},
 };
+
+mod map;
+mod glb;
+mod player;
+mod collision;
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -15,103 +25,29 @@ use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 mod webrtc;
 
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
+use map::{MapVertex, LoadedMap};
+#[cfg(not(target_arch = "wasm32"))]
+use glb::load_glb;
+use glb::load_glb_from_bytes;
 
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
+// Embed the GLB file for WASM builds
+#[cfg(target_arch = "wasm32")]
+const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
+use player::Player;
+use collision::PhysicsWorld;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-struct Uniforms {
-    mvp: [[f32; 4]; 4],
+struct CameraUniform {
+    view_proj: [[f32; 4]; 4],
 }
 
-const VERTICES: &[Vertex] = &[
-    // Front face (red)
-    Vertex { position: [-0.5, -0.5,  0.5], color: [1.0, 0.4, 0.4] },
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 0.4, 0.4] },
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [1.0, 0.4, 0.4] },
-    Vertex { position: [-0.5,  0.5,  0.5], color: [1.0, 0.4, 0.4] },
-    // Back face (green)
-    Vertex { position: [-0.5, -0.5, -0.5], color: [0.4, 1.0, 0.4] },
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.4, 1.0, 0.4] },
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [0.4, 1.0, 0.4] },
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [0.4, 1.0, 0.4] },
-    // Top face (blue)
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.4, 0.4, 1.0] },
-    Vertex { position: [-0.5,  0.5,  0.5], color: [0.4, 0.4, 1.0] },
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [0.4, 0.4, 1.0] },
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [0.4, 0.4, 1.0] },
-    // Bottom face (yellow)
-    Vertex { position: [-0.5, -0.5, -0.5], color: [1.0, 1.0, 0.4] },
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [1.0, 1.0, 0.4] },
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 1.0, 0.4] },
-    Vertex { position: [-0.5, -0.5,  0.5], color: [1.0, 1.0, 0.4] },
-    // Right face (magenta)
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [1.0, 0.4, 1.0] },
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 0.4, 1.0] },
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [1.0, 0.4, 1.0] },
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [1.0, 0.4, 1.0] },
-    // Left face (cyan)
-    Vertex { position: [-0.5, -0.5, -0.5], color: [0.4, 1.0, 1.0] },
-    Vertex { position: [-0.5, -0.5,  0.5], color: [0.4, 1.0, 1.0] },
-    Vertex { position: [-0.5,  0.5,  0.5], color: [0.4, 1.0, 1.0] },
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.4, 1.0, 1.0] },
-];
-
-const INDICES: &[u16] = &[
-    0,  1,  2,  0,  2,  3,  // front
-    4,  5,  6,  4,  6,  7,  // back
-    8,  9,  10, 8,  10, 11, // top
-    12, 13, 14, 12, 14, 15, // bottom
-    16, 17, 18, 16, 18, 19, // right
-    20, 21, 22, 20, 22, 23, // left
-];
-
-const SHADER: &str = r#"
-struct Uniforms {
-    mvp: mat4x4<f32>,
+struct MapRenderData {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    bind_group: wgpu::BindGroup,
 }
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
-}
-
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
-}
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    out.clip_position = uniforms.mvp * vec4<f32>(in.position, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
-}
-"#;
 
 struct GpuState {
     window: Arc<Window>,
@@ -119,19 +55,24 @@ struct GpuState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    rotation_x: f32,
-    rotation_y: f32,
-    mouse_pressed: bool,
-    last_mouse_pos: Option<(f64, f64)>,
+    camera_uniform_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    map_meshes: Vec<MapRenderData>,
+    player: Player,
+    physics: Option<PhysicsWorld>,
+    last_frame_time: Instant,
+    cursor_grabbed: bool,
+    #[allow(dead_code)]
+    last_cursor_pos: Option<(f64, f64)>,
 }
 
 impl GpuState {
-    async fn new(window: Arc<Window>) -> Self {
+    async fn new(window: Arc<Window>, loaded_map: Option<LoadedMap>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let (width, height) = {
             let web_window = web_sys::window().expect("No window");
@@ -189,31 +130,29 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
+        // Create depth texture
+        let (depth_texture, depth_view) = create_depth_texture(&device, width, height);
+
+        // Load shader
+        let shader_source = include_str!("map.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            label: Some("Map Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[Uniforms { mvp: Mat4::IDENTITY.to_cols_array_2d() }]),
+        // Camera uniform buffer
+        let camera_uniform = CameraUniform {
+            view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+        };
+        let camera_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bind Group Layout"),
+        // Camera bind group layout
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Camera Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -226,28 +165,53 @@ impl GpuState {
             }],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bind Group"),
-            layout: &bind_group_layout,
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Camera Bind Group"),
+            layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
+                resource: camera_uniform_buffer.as_entire_binding(),
             }],
         });
 
+        // Texture bind group layout
+        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Texture Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            label: Some("Map Pipeline Layout"),
+            bind_group_layouts: &[&camera_bind_group_layout, &texture_bind_group_layout],
             immediate_size: 0,
         });
 
+        // Render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
+            label: Some("Map Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[MapVertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -255,7 +219,7 @@ impl GpuState {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -264,16 +228,195 @@ impl GpuState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None, // BSP faces can be visible from both sides
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
         });
+
+        // Default sampler
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Map Texture Sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest, // Crispy pixel textures
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Process map data if available
+        let (map_meshes, player, physics) = if let Some(loaded_map) = loaded_map {
+            let mut gpu_textures: HashMap<String, (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)> = HashMap::new();
+            
+            // Create GPU textures
+            for (name, tex_data) in &loaded_map.textures {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(name),
+                    size: wgpu::Extent3d {
+                        width: tex_data.width,
+                        height: tex_data.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &tex_data.rgba,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(tex_data.width * 4),
+                        rows_per_image: Some(tex_data.height),
+                    },
+                    wgpu::Extent3d {
+                        width: tex_data.width,
+                        height: tex_data.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("{} Bind Group", name)),
+                    layout: &texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
+                });
+
+                gpu_textures.insert(name.clone(), (texture, view, bind_group));
+            }
+
+            // Create placeholder texture for missing textures
+            let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Placeholder"),
+                size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            
+            // Magenta/black checker
+            let mut placeholder_data = Vec::with_capacity(16 * 16 * 4);
+            for y in 0..16 {
+                for x in 0..16 {
+                    if ((x / 4) + (y / 4)) % 2 == 0 {
+                        placeholder_data.extend_from_slice(&[255, 0, 255, 255]);
+                    } else {
+                        placeholder_data.extend_from_slice(&[0, 0, 0, 255]);
+                    }
+                }
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &placeholder_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &placeholder_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(16 * 4),
+                    rows_per_image: Some(16),
+                },
+                wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
+            );
+            let placeholder_view = placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let placeholder_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Placeholder Bind Group"),
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&placeholder_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
+            // Create mesh render data
+            let mut map_meshes = Vec::new();
+            for mesh in &loaded_map.meshes {
+                if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+                    continue;
+                }
+
+                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} Vertex Buffer", mesh.texture_name)),
+                    contents: bytemuck::cast_slice(&mesh.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} Index Buffer", mesh.texture_name)),
+                    contents: bytemuck::cast_slice(&mesh.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+
+                let bind_group = if let Some((_, _, bg)) = gpu_textures.get(&mesh.texture_name) {
+                    bg.clone()
+                } else {
+                    placeholder_bind_group.clone()
+                };
+
+                map_meshes.push(MapRenderData {
+                    vertex_buffer,
+                    index_buffer,
+                    index_count: mesh.indices.len() as u32,
+                    bind_group,
+                });
+            }
+
+            let player = Player::new(loaded_map.spawn_point);
+            
+            let physics = PhysicsWorld::new(
+                &loaded_map.collision_vertices,
+                &loaded_map.collision_indices,
+                loaded_map.spawn_point,
+            );
+
+            (map_meshes, player, Some(physics))
+        } else {
+            // No map loaded - create empty state
+            (Vec::new(), Player::new(Vec3::new(0.0, 100.0, 0.0)), None)
+        };
 
         Self {
             window,
@@ -281,45 +424,19 @@ impl GpuState {
             device,
             queue,
             config,
+            depth_texture,
+            depth_view,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            uniform_buffer,
-            bind_group,
-            rotation_x: 0.3,
-            rotation_y: 0.0,
-            mouse_pressed: false,
-            last_mouse_pos: None,
+            camera_uniform_buffer,
+            camera_bind_group,
+            texture_bind_group_layout,
+            map_meshes,
+            player,
+            physics,
+            last_frame_time: Instant::now(),
+            cursor_grabbed: false,
+            last_cursor_pos: None,
         }
-    }
-
-    fn handle_mouse_input(&mut self, pressed: bool) {
-        self.mouse_pressed = pressed;
-        if !pressed {
-            self.last_mouse_pos = None;
-        }
-    }
-
-    fn handle_mouse_move(&mut self, x: f64, y: f64) {
-        if self.mouse_pressed {
-            if let Some((last_x, last_y)) = self.last_mouse_pos {
-                let dx = (x - last_x) as f32;
-                let dy = (y - last_y) as f32;
-                
-                self.apply_rotation(dx * 0.01, dy * 0.01);
-                
-                #[cfg(target_arch = "wasm32")]
-                webrtc::send_rotation_to_peer(dx * 0.01, dy * 0.01);
-            }
-            self.last_mouse_pos = Some((x, y));
-            self.window.request_redraw();
-        }
-    }
-    
-    fn apply_rotation(&mut self, dy: f32, dx: f32) {
-        self.rotation_y += dy;
-        self.rotation_x += dx;
-        self.rotation_x = self.rotation_x.clamp(-1.5, 1.5);
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -327,20 +444,47 @@ impl GpuState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            
+            // Recreate depth texture
+            let (depth_texture, depth_view) = create_depth_texture(&self.device, new_size.width, new_size.height);
+            self.depth_texture = depth_texture;
+            self.depth_view = depth_view;
+        }
+    }
+
+    fn update(&mut self) {
+        let now = Instant::now();
+        let dt = (now - self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+
+        // Cap dt to prevent huge jumps
+        let dt = dt.min(0.1);
+
+        // Update player
+        self.player.update(dt);
+
+        // Apply physics collision
+        if let Some(physics) = &mut self.physics {
+            let desired_pos = self.player.position;
+            let (new_pos, on_ground) = physics.move_player(desired_pos);
+            self.player.position = new_pos;
+            self.player.set_on_ground(on_ground, None);
         }
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.update();
+
+        // Update camera uniform
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let projection = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
-        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 3.0), Vec3::ZERO, Vec3::Y);
-        let model = Mat4::from_rotation_y(self.rotation_y) * Mat4::from_rotation_x(self.rotation_x);
-        let mvp = projection * view * model;
+        let projection = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0);
+        let view = self.player.view_matrix();
+        let view_proj = projection * view;
 
         self.queue.write_buffer(
-            &self.uniform_buffer,
+            &self.camera_uniform_buffer,
             0,
-            bytemuck::cast_slice(&[Uniforms { mvp: mvp.to_cols_array_2d() }]),
+            bytemuck::cast_slice(&[CameraUniform { view_proj: view_proj.to_cols_array_2d() }]),
         );
 
         let output = self.surface.get_current_texture()?;
@@ -352,32 +496,43 @@ impl GpuState {
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
+                label: Some("Map Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.15,
+                            r: 0.5,
+                            g: 0.7,
+                            b: 0.9,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+
+            for mesh in &self.map_meshes {
+                render_pass.set_bind_group(1, &mesh.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -385,38 +540,113 @@ impl GpuState {
 
         Ok(())
     }
+
+    fn grab_cursor(&mut self, grab: bool) {
+        self.cursor_grabbed = grab;
+        if grab {
+            let _ = self.window.set_cursor_grab(CursorGrabMode::Confined)
+                .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Locked));
+            self.window.set_cursor_visible(false);
+        } else {
+            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+            self.window.set_cursor_visible(true);
+        }
+    }
 }
 
-#[cfg(target_arch = "wasm32")]
-thread_local! {
-    static GPU_STATE: RefCell<Option<GpuState>> = const { RefCell::new(None) };
+fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Depth Texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 struct App {
-    #[cfg(not(target_arch = "wasm32"))]
     gpu_state: Option<GpuState>,
+    loaded_map: Option<LoadedMap>,
 }
 
 impl App {
     fn new() -> Self {
+        // Try to load map on native platforms
+        #[cfg(not(target_arch = "wasm32"))]
+        let loaded_map = {
+            let glb_path = Path::new("assets/dust2.glb");
+            
+            match load_glb(glb_path) {
+                Ok(map) => {
+                    log::info!("Loaded GLB with {} meshes, {} textures", 
+                        map.meshes.len(), map.textures.len());
+                    log::info!("Spawn point: {:?}", map.spawn_point);
+                    log::info!("Collision: {} vertices, {} triangles",
+                        map.collision_vertices.len(), map.collision_indices.len());
+                    Some(map)
+                }
+                Err(e) => {
+                    log::warn!("Failed to load map: {}. Running without map.", e);
+                    log::info!("Place dust2.glb in the assets/ folder.");
+                    None
+                }
+            }
+        };
+        
+        #[cfg(target_arch = "wasm32")]
+        let loaded_map = {
+            match load_glb_from_bytes(EMBEDDED_MAP) {
+                Ok(map) => {
+                    log::info!("Loaded embedded GLB with {} meshes, {} textures", 
+                        map.meshes.len(), map.textures.len());
+                    Some(map)
+                }
+                Err(e) => {
+                    log::warn!("Failed to load embedded map: {}", e);
+                    None
+                }
+            }
+        };
+        
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_state: None,
+            loaded_map,
         }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        #[cfg(not(target_arch = "wasm32"))]
         if self.gpu_state.is_some() {
             return;
         }
 
         let window_attrs = Window::default_attributes()
-            .with_title("Rust wgpu Cube");
+            .with_title("CS 1.6 Map Viewer");
         
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let loaded_map = self.loaded_map.take();
+            self.gpu_state = Some(pollster::block_on(GpuState::new(window.clone(), loaded_map)));
+            
+            // Grab cursor for FPS controls
+            if let Some(state) = &mut self.gpu_state {
+                state.grab_cursor(true);
+            }
+            
+            window.request_redraw();
+        }
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -442,89 +672,168 @@ impl ApplicationHandler for App {
                 })
                 .expect("Couldn't append canvas to document body.");
 
+            // Take the loaded map for the async block
+            let loaded_map = self.loaded_map.take();
+            
             let window_clone = window.clone();
-            let init_width = width;
-            let init_height = height;
             wasm_bindgen_futures::spawn_local(async move {
-                let mut state = GpuState::new(window_clone.clone()).await;
-                state.resize(winit::dpi::PhysicalSize::new(init_width, init_height));
+                let state = GpuState::new(window_clone.clone(), loaded_map).await;
                 GPU_STATE.with(|s| {
                     *s.borrow_mut() = Some(state);
                 });
                 window_clone.request_redraw();
-                
-                // Initialize WebRTC client
-                webrtc::init_webrtc_client();
-                webrtc::set_rotation_callback(|dx, dy| {
-                    GPU_STATE.with(|s| {
-                        if let Some(state) = s.borrow_mut().as_mut() {
-                            state.apply_rotation(dx, dy);
-                            state.window.request_redraw();
-                        }
-                    });
-                });
             });
         }
+    }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.gpu_state = Some(pollster::block_on(GpuState::new(window.clone())));
-            window.request_redraw();
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(state) = &mut self.gpu_state {
+                if state.cursor_grabbed {
+                    state.player.handle_mouse_move(delta.0 as f32, delta.1 as f32);
+                    state.window.request_redraw();
+                }
+            }
+            
+            #[cfg(target_arch = "wasm32")]
+            GPU_STATE.with(|s| {
+                if let Some(state) = s.borrow_mut().as_mut() {
+                    if state.cursor_grabbed {
+                        state.player.handle_mouse_move(delta.0 as f32, delta.1 as f32);
+                        state.window.request_redraw();
+                    }
+                }
+            });
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let state = &mut self.gpu_state;
+        
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
             WindowEvent::Resized(physical_size) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(state) = state {
+                    state.resize(physical_size);
+                }
+                
                 #[cfg(target_arch = "wasm32")]
                 GPU_STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
                         state.resize(physical_size);
                     }
                 });
-                
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(state) = &mut self.gpu_state {
-                    state.resize(physical_size);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(key_code) = event.physical_key {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(state) = state {
+                        match event.state {
+                            ElementState::Pressed => {
+                                if key_code == KeyCode::Escape {
+                                    state.grab_cursor(!state.cursor_grabbed);
+                                } else {
+                                    state.player.handle_key_press(key_code);
+                                }
+                            }
+                            ElementState::Released => {
+                                state.player.handle_key_release(key_code);
+                            }
+                        }
+                        state.window.request_redraw();
+                    }
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    GPU_STATE.with(|s| {
+                        if let Some(state) = s.borrow_mut().as_mut() {
+                            match event.state {
+                                ElementState::Pressed => {
+                                    if key_code == KeyCode::Escape {
+                                        // Exit pointer lock
+                                        if let Some(window) = web_sys::window() {
+                                            if let Some(document) = window.document() {
+                                                document.exit_pointer_lock();
+                                            }
+                                        }
+                                        state.cursor_grabbed = false;
+                                    } else {
+                                        state.player.handle_key_press(key_code);
+                                    }
+                                }
+                                ElementState::Released => {
+                                    state.player.handle_key_release(key_code);
+                                }
+                            }
+                            state.window.request_redraw();
+                        }
+                    });
                 }
             }
             WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
-                let pressed = button_state == ElementState::Pressed;
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(state) = state {
+                    if button_state == ElementState::Pressed && !state.cursor_grabbed {
+                        state.grab_cursor(true);
+                    }
+                }
                 
                 #[cfg(target_arch = "wasm32")]
-                GPU_STATE.with(|s| {
-                    if let Some(state) = s.borrow_mut().as_mut() {
-                        state.handle_mouse_input(pressed);
+                if button_state == ElementState::Pressed {
+                    // Request pointer lock on click
+                    if let Some(window) = web_sys::window() {
+                        if let Some(document) = window.document() {
+                            if let Some(canvas) = document.get_element_by_id("wasm-container") {
+                                if let Some(canvas) = canvas.first_element_child() {
+                                    let _ = canvas.request_pointer_lock();
+                                    GPU_STATE.with(|s| {
+                                        if let Some(state) = s.borrow_mut().as_mut() {
+                                            state.cursor_grabbed = true;
+                                        }
+                                    });
+                                }
+                            }
+                        }
                     }
-                });
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(state) = &mut self.gpu_state {
-                    state.handle_mouse_input(pressed);
-                }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                #[cfg(target_arch = "wasm32")]
-                GPU_STATE.with(|s| {
-                    if let Some(state) = s.borrow_mut().as_mut() {
-                        state.handle_mouse_move(position.x, position.y);
-                    }
-                });
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(state) = &mut self.gpu_state {
-                    state.handle_mouse_move(position.x, position.y);
                 }
             }
             WindowEvent::RedrawRequested => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(state) = state {
+                    match state.render() {
+                        Ok(_) => {
+                            // Request continuous redraw for smooth movement
+                            state.window.request_redraw();
+                        }
+                        Err(wgpu::SurfaceError::Lost) => {
+                            let size = winit::dpi::PhysicalSize::new(
+                                state.config.width,
+                                state.config.height,
+                            );
+                            state.resize(size);
+                        }
+                        Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+                        Err(e) => log::error!("Render error: {:?}", e),
+                    }
+                }
+
                 #[cfg(target_arch = "wasm32")]
                 GPU_STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
                         match state.render() {
-                            Ok(_) => {}
+                            Ok(_) => {
+                                // Request continuous redraw for game loop
+                                state.window.request_redraw();
+                            }
                             Err(wgpu::SurfaceError::Lost) => {
                                 let size = winit::dpi::PhysicalSize::new(
                                     state.config.width,
@@ -537,23 +846,15 @@ impl ApplicationHandler for App {
                         }
                     }
                 });
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(state) = &mut self.gpu_state {
-                    match state.render() {
-                        Ok(_) => {}
-                        Err(wgpu::SurfaceError::Lost) => state.resize(winit::dpi::PhysicalSize::new(
-                            state.config.width,
-                            state.config.height,
-                        )),
-                        Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                        Err(e) => log::error!("Render error: {:?}", e),
-                    }
-                }
             }
             _ => {}
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static GPU_STATE: RefCell<Option<GpuState>> = const { RefCell::new(None) };
 }
 
 #[cfg(target_arch = "wasm32")]
