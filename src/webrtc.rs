@@ -367,35 +367,22 @@ fn create_peer_connection(
     on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
     connected: &Rc<RefCell<bool>>,
 ) -> Result<RtcPeerConnection, JsValue> {
-    // Configure with STUN and TURN servers for NAT traversal
+    // Configure with multiple STUN servers for NAT traversal
+    // TURN servers require credentials - free ones are unreliable
     let config = RtcConfiguration::new();
     let ice_servers = js_sys::Array::new();
     
-    // STUN server
+    // Multiple STUN servers for better connectivity
+    let stun_urls = js_sys::Array::new();
+    stun_urls.push(&"stun:stun.l.google.com:19302".into());
+    stun_urls.push(&"stun:stun1.l.google.com:19302".into());
+    stun_urls.push(&"stun:stun2.l.google.com:19302".into());
+    stun_urls.push(&"stun:stun3.l.google.com:19302".into());
+    stun_urls.push(&"stun:stun4.l.google.com:19302".into());
+    
     let stun_server = js_sys::Object::new();
-    js_sys::Reflect::set(&stun_server, &"urls".into(), &"stun:stun.l.google.com:19302".into())?;
+    js_sys::Reflect::set(&stun_server, &"urls".into(), &stun_urls)?;
     ice_servers.push(&stun_server);
-    
-    // Free TURN server (OpenRelay)
-    let turn_server = js_sys::Object::new();
-    js_sys::Reflect::set(&turn_server, &"urls".into(), &"turn:openrelay.metered.ca:80".into())?;
-    js_sys::Reflect::set(&turn_server, &"username".into(), &"openrelayproject".into())?;
-    js_sys::Reflect::set(&turn_server, &"credential".into(), &"openrelayproject".into())?;
-    ice_servers.push(&turn_server);
-    
-    // TURN over TLS (for restrictive firewalls)
-    let turn_tls_server = js_sys::Object::new();
-    js_sys::Reflect::set(&turn_tls_server, &"urls".into(), &"turn:openrelay.metered.ca:443".into())?;
-    js_sys::Reflect::set(&turn_tls_server, &"username".into(), &"openrelayproject".into())?;
-    js_sys::Reflect::set(&turn_tls_server, &"credential".into(), &"openrelayproject".into())?;
-    ice_servers.push(&turn_tls_server);
-    
-    // TURNS (TURN over TLS on 443)
-    let turns_server = js_sys::Object::new();
-    js_sys::Reflect::set(&turns_server, &"urls".into(), &"turns:openrelay.metered.ca:443?transport=tcp".into())?;
-    js_sys::Reflect::set(&turns_server, &"username".into(), &"openrelayproject".into())?;
-    js_sys::Reflect::set(&turns_server, &"credential".into(), &"openrelayproject".into())?;
-    ice_servers.push(&turns_server);
     
     config.set_ice_servers(&ice_servers);
     
