@@ -1,11 +1,3 @@
-// Network
-pub const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch/ws";
-pub const STUN_SERVERS: &[&str] = &[
-    "stun:ggj26.cheapmo.ch:3478",
-    "stun:stun.l.google.com:19302",
-    "stun:stun1.l.google.com:19302",
-];
-
 // Player dimensions and physics
 pub const PLAYER_HEIGHT: f32 = 80.0;
 pub const PLAYER_WIDTH: f32 = 22.0;

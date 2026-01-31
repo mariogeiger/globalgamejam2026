@@ -9,7 +9,7 @@ use crate::glb::{SPAWNS_TEAM_A, SPAWNS_TEAM_B};
 
 // === Team ===
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Team {
     A,
     B,
@@ -237,53 +237,171 @@ pub struct PlayerUniform {
 }
 
 pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
-    let (hw, hd, h) = (PLAYER_WIDTH / 2.0, PLAYER_WIDTH / 2.0, PLAYER_HEIGHT);
+    let hw = PLAYER_WIDTH / 2.0;
+    let hd = PLAYER_WIDTH / 2.0;
+    let head_height = 2.0 * (PLAYER_HEIGHT - EYE_HEIGHT); // eyes at center of head
+    let leg_height = STEP_OVER_HEIGHT;
+    let body_top = PLAYER_HEIGHT - head_height;
 
-    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        (
-            [0.0, 0.0, 1.0],
-            [[-hw, 0.0, hd], [hw, 0.0, hd], [hw, h, hd], [-hw, h, hd]],
-        ), // Front
-        (
-            [0.0, 0.0, -1.0],
-            [[hw, 0.0, -hd], [-hw, 0.0, -hd], [-hw, h, -hd], [hw, h, -hd]],
-        ), // Back
-        (
-            [-1.0, 0.0, 0.0],
-            [[-hw, 0.0, -hd], [-hw, 0.0, hd], [-hw, h, hd], [-hw, h, -hd]],
-        ), // Left
-        (
-            [1.0, 0.0, 0.0],
-            [[hw, 0.0, hd], [hw, 0.0, -hd], [hw, h, -hd], [hw, h, hd]],
-        ), // Right
-        (
-            [0.0, 1.0, 0.0],
-            [[-hw, h, hd], [hw, h, hd], [hw, h, -hd], [-hw, h, -hd]],
-        ), // Top
-        (
-            [0.0, -1.0, 0.0],
-            [
-                [-hw, 0.0, -hd],
-                [hw, 0.0, -hd],
-                [hw, 0.0, hd],
-                [-hw, 0.0, hd],
-            ],
-        ), // Bottom
-    ];
+    let mut vertices = Vec::with_capacity(24 * 3 + 18); // 2 legs + body + head
+    let mut indices = Vec::with_capacity(36 * 3 + 24);
 
-    let mut vertices = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-
-    for (normal, positions) in faces {
-        let base = vertices.len() as u32;
-        for pos in positions {
-            vertices.push(PlayerVertex {
-                position: pos,
-                normal,
-            });
+    // Helper to add a box
+    let mut add_box = |x_min: f32, x_max: f32, y_min: f32, y_max: f32, z_min: f32, z_max: f32| {
+        let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+            (
+                [0.0, 0.0, 1.0],
+                [
+                    [x_min, y_min, z_max],
+                    [x_max, y_min, z_max],
+                    [x_max, y_max, z_max],
+                    [x_min, y_max, z_max],
+                ],
+            ), // +Z
+            (
+                [0.0, 0.0, -1.0],
+                [
+                    [x_max, y_min, z_min],
+                    [x_min, y_min, z_min],
+                    [x_min, y_max, z_min],
+                    [x_max, y_max, z_min],
+                ],
+            ), // -Z
+            (
+                [-1.0, 0.0, 0.0],
+                [
+                    [x_min, y_min, z_min],
+                    [x_min, y_min, z_max],
+                    [x_min, y_max, z_max],
+                    [x_min, y_max, z_min],
+                ],
+            ), // -X
+            (
+                [1.0, 0.0, 0.0],
+                [
+                    [x_max, y_min, z_max],
+                    [x_max, y_min, z_min],
+                    [x_max, y_max, z_min],
+                    [x_max, y_max, z_max],
+                ],
+            ), // +X
+            (
+                [0.0, 1.0, 0.0],
+                [
+                    [x_min, y_max, z_max],
+                    [x_max, y_max, z_max],
+                    [x_max, y_max, z_min],
+                    [x_min, y_max, z_min],
+                ],
+            ), // +Y
+            (
+                [0.0, -1.0, 0.0],
+                [
+                    [x_min, y_min, z_min],
+                    [x_max, y_min, z_min],
+                    [x_max, y_min, z_max],
+                    [x_min, y_min, z_max],
+                ],
+            ), // -Y
+        ];
+        for (normal, positions) in faces {
+            let base = vertices.len() as u32;
+            for pos in positions {
+                vertices.push(PlayerVertex {
+                    position: pos,
+                    normal,
+                });
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    };
+
+    // Legs: two boxes from 0 to leg_height
+    let leg_gap = hw * 0.3; // gap between legs
+    // Left leg
+    add_box(-hw, -leg_gap, 0.0, leg_height, -hd * 0.8, hd * 0.8);
+    // Right leg
+    add_box(leg_gap, hw, 0.0, leg_height, -hd * 0.8, hd * 0.8);
+
+    // Body (torso): from leg_height to body_top
+    add_box(-hw, hw, leg_height, body_top, -hd, hd);
+
+    // Head: triangular prism pointing forward (-Z direction)
+    let head_base = body_top; // sits on top of body
+    let head_top = PLAYER_HEIGHT; // reaches total height
+    let head_tip_z = -hd - PLAYER_WIDTH * 0.6; // tip extends forward
+
+    // Head vertices: back edge (two corners at body top) + front tip
+    // Back-left, back-right corners at body height
+    let bl = [-hw * 0.7, head_base, hd * 0.5];
+    let br = [hw * 0.7, head_base, hd * 0.5];
+    let tl = [-hw * 0.7, head_top, hd * 0.5];
+    let tr = [hw * 0.7, head_top, hd * 0.5];
+    // Front tip (the point)
+    let fb = [0.0, head_base, head_tip_z];
+    let ft = [0.0, head_top, head_tip_z];
+
+    // Calculate normals for angled faces (pointing outward)
+    let left_normal = {
+        let edge1 = Vec3::new(tl[0] - bl[0], tl[1] - bl[1], tl[2] - bl[2]); // bl → tl (up)
+        let edge2 = Vec3::new(fb[0] - bl[0], fb[1] - bl[1], fb[2] - bl[2]); // bl → fb (forward)
+        edge1.cross(edge2).normalize()
+    };
+    let right_normal = {
+        let edge1 = Vec3::new(fb[0] - br[0], fb[1] - br[1], fb[2] - br[2]); // br → fb (forward)
+        let edge2 = Vec3::new(tr[0] - br[0], tr[1] - br[1], tr[2] - br[2]); // br → tr (up)
+        edge1.cross(edge2).normalize()
+    };
+
+    // Left face of head (quad: bl, tl, ft, fb) - CCW from outside (-X)
+    let base = vertices.len() as u32;
+    for pos in [bl, tl, ft, fb] {
+        vertices.push(PlayerVertex {
+            position: pos,
+            normal: [left_normal.x, left_normal.y, left_normal.z],
+        });
     }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+    // Right face of head (quad: br, fb, ft, tr) - CCW from outside (+X)
+    let base = vertices.len() as u32;
+    for pos in [br, fb, ft, tr] {
+        vertices.push(PlayerVertex {
+            position: pos,
+            normal: [right_normal.x, right_normal.y, right_normal.z],
+        });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+    // Back face of head (quad: bl, br, tr, tl) - CCW from outside (+Z)
+    let base = vertices.len() as u32;
+    for pos in [bl, br, tr, tl] {
+        vertices.push(PlayerVertex {
+            position: pos,
+            normal: [0.0, 0.0, 1.0],
+        });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+    // Top face of head (triangle: tl, tr, ft) - CCW from outside (+Y)
+    let base = vertices.len() as u32;
+    for pos in [tl, tr, ft] {
+        vertices.push(PlayerVertex {
+            position: pos,
+            normal: [0.0, 1.0, 0.0],
+        });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2]);
+
+    // Bottom face of head (triangle: bl, fb, br) - CCW from outside (-Y)
+    let base = vertices.len() as u32;
+    for pos in [bl, fb, br] {
+        vertices.push(PlayerVertex {
+            position: pos,
+            normal: [0.0, -1.0, 0.0],
+        });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2]);
 
     (vertices, indices)
 }

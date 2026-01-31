@@ -27,6 +27,7 @@ serde_json = "1.0.149"
 js-sys = "0.3.85"
 web-sys = { version = "0.3.85", features = [
     "Document", "Window", "Element", "HtmlCanvasElement",
+    "Location", "Url",
     "RtcPeerConnection", "RtcPeerConnectionIceEvent", "RtcIceCandidate",
     "RtcIceCandidateInit", "RtcDataChannel", "RtcDataChannelEvent",
     "RtcDataChannelState", "RtcSessionDescription", "RtcSessionDescriptionInit",

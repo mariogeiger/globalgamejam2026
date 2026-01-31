@@ -113,14 +113,14 @@ struct GpuState {
     camera_bind_group: wgpu::BindGroup,
     map_meshes: Vec<MapRenderData>,
     player: Player,
-    physics: Option<PhysicsWorld>,
+    physics: PhysicsWorld,
     last_frame_time: Instant,
     cursor_grabbed: bool,
     spawn_points: Vec<Vec3>,
-    map_bounds: Option<(Vec3, Vec3)>,
+    map_bounds: (Vec3, Vec3),
     local_team: Option<Team>,
-    remote_player: Option<RemotePlayer>,
-    player_render: Option<PlayerRenderData>,
+    remote_players: HashMap<u64, RemotePlayer>,
+    player_render: PlayerRenderData,
     // Post-processing: scene render target and fullscreen pass
     offscreen_texture: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
@@ -147,7 +147,7 @@ struct GpuState {
 }
 
 impl GpuState {
-    async fn new(window: Arc<Window>, loaded_map: Option<LoadedMap>) -> Self {
+    async fn new(window: Arc<Window>, loaded_map: LoadedMap) -> Self {
         let (width, height) = {
             let web_window = web_sys::window().expect("No window");
             let dpr = web_window.device_pixel_ratio();
@@ -532,66 +532,49 @@ impl GpuState {
             ],
         });
 
-        let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) =
-            loaded_map
-        {
-            let mut gpu_textures: HashMap<String, wgpu::BindGroup> = HashMap::new();
+        let mut gpu_textures: HashMap<String, wgpu::BindGroup> = HashMap::new();
 
-            for (name, tex_data) in &loaded_map.textures {
-                let (_, _, bg) = create_texture_with_bind_group(
-                    &device,
-                    &queue,
-                    &texture_layout,
-                    &sampler,
-                    &tex_data.rgba,
-                    tex_data.width,
-                    tex_data.height,
-                    name,
-                );
-                gpu_textures.insert(name.clone(), bg);
-            }
-
-            let placeholder =
-                create_placeholder_bind_group(&device, &queue, &texture_layout, &sampler);
-
-            let map_meshes: Vec<_> = loaded_map
-                .meshes
-                .iter()
-                .filter(|m| !m.vertices.is_empty() && !m.indices.is_empty())
-                .map(|mesh| MapRenderData {
-                    vertex_buffer: create_vertex_buffer(
-                        &device,
-                        &mesh.vertices,
-                        &mesh.texture_name,
-                    ),
-                    index_buffer: create_index_buffer(&device, &mesh.indices, &mesh.texture_name),
-                    index_count: mesh.indices.len() as u32,
-                    bind_group: gpu_textures
-                        .get(&mesh.texture_name)
-                        .cloned()
-                        .unwrap_or_else(|| placeholder.clone()),
-                })
-                .collect();
-
-            let spawn_idx = rand::rng().random_range(0..loaded_map.spawn_points.len());
-            let initial_spawn = loaded_map.spawn_points[spawn_idx];
-            let player = Player::new(initial_spawn);
-            let physics = PhysicsWorld::new(
-                &loaded_map.collision_vertices,
-                &loaded_map.collision_indices,
+        for (name, tex_data) in &loaded_map.textures {
+            let (_, _, bg) = create_texture_with_bind_group(
+                &device,
+                &queue,
+                &texture_layout,
+                &sampler,
+                &tex_data.rgba,
+                tex_data.width,
+                tex_data.height,
+                name,
             );
+            gpu_textures.insert(name.clone(), bg);
+        }
 
-            (
-                map_meshes,
-                player,
-                physics,
-                loaded_map.spawn_points,
-                Some((loaded_map.bounds_min, loaded_map.bounds_max)),
-            )
-        } else {
-            let spawn = vec![Vec3::new(0.0, 100.0, 0.0)];
-            (Vec::new(), Player::new(spawn[0]), None, spawn, None)
-        };
+        let placeholder = create_placeholder_bind_group(&device, &queue, &texture_layout, &sampler);
+
+        let map_meshes: Vec<_> = loaded_map
+            .meshes
+            .iter()
+            .filter(|m| !m.vertices.is_empty() && !m.indices.is_empty())
+            .map(|mesh| MapRenderData {
+                vertex_buffer: create_vertex_buffer(&device, &mesh.vertices, &mesh.texture_name),
+                index_buffer: create_index_buffer(&device, &mesh.indices, &mesh.texture_name),
+                index_count: mesh.indices.len() as u32,
+                bind_group: gpu_textures
+                    .get(&mesh.texture_name)
+                    .cloned()
+                    .unwrap_or_else(|| placeholder.clone()),
+            })
+            .collect();
+
+        let spawn_idx = rand::rng().random_range(0..loaded_map.spawn_points.len());
+        let initial_spawn = loaded_map.spawn_points[spawn_idx];
+        let player = Player::new(initial_spawn);
+        let physics = PhysicsWorld::new(
+            &loaded_map.collision_vertices,
+            &loaded_map.collision_indices,
+        )
+        .expect("Failed to create physics world");
+        let spawn_points = loaded_map.spawn_points;
+        let map_bounds = (loaded_map.bounds_min, loaded_map.bounds_max);
 
         let player_render = {
             let player_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -648,23 +631,24 @@ impl GpuState {
                 model: Mat4::IDENTITY.to_cols_array_2d(),
                 color: [1.0, 0.0, 0.0, 1.0],
             };
+            let uniform_buffer = create_uniform_buffer(&device, &uniform, "Player Uniform");
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Player Bind Group"),
+                layout: &player_uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
 
-            Some(PlayerRenderData {
+            PlayerRenderData {
                 vertex_buffer: create_vertex_buffer(&device, &vertices, "Player Vertex"),
                 index_buffer: create_index_buffer(&device, &indices, "Player Index"),
                 index_count: indices.len() as u32,
                 pipeline: player_pipeline,
-                uniform_buffer: create_uniform_buffer(&device, &uniform, "Player Uniform"),
-                bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Player Bind Group"),
-                    layout: &player_uniform_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: create_uniform_buffer(&device, &uniform, "Player Uniform")
-                            .as_entire_binding(),
-                    }],
-                }),
-            })
+                uniform_buffer,
+                bind_group,
+            }
         };
 
         Self {
@@ -685,7 +669,7 @@ impl GpuState {
             spawn_points,
             map_bounds,
             local_team: None,
-            remote_player: None,
+            remote_players: HashMap::new(),
             player_render,
             offscreen_texture,
             offscreen_view,
@@ -845,31 +829,39 @@ impl GpuState {
 
         self.player.update(dt);
 
-        if let Some(ref physics) = self.physics {
-            let (new_pos, on_ground) =
-                physics.move_player(self.player.position, self.player.velocity);
-            self.player.position = new_pos;
-            self.player.set_on_ground(on_ground, None);
-        }
+        let (new_pos, on_ground) = self
+            .physics
+            .move_player(self.player.position, self.player.velocity);
+        self.player.position = new_pos;
+        self.player.set_on_ground(on_ground, None);
 
-        if let Some((bounds_min, bounds_max)) = self.map_bounds {
-            let pos = self.player.position;
-            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
-                || pos.x > bounds_max.x + RESPAWN_MARGIN
-                || pos.y < bounds_min.y - RESPAWN_MARGIN
-                || pos.y > bounds_max.y + RESPAWN_MARGIN
-                || pos.z < bounds_min.z - RESPAWN_MARGIN
-                || pos.z > bounds_max.z + RESPAWN_MARGIN;
+        let (bounds_min, bounds_max) = self.map_bounds;
+        let pos = self.player.position;
+        let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
+            || pos.x > bounds_max.x + RESPAWN_MARGIN
+            || pos.y < bounds_min.y - RESPAWN_MARGIN
+            || pos.y > bounds_max.y + RESPAWN_MARGIN
+            || pos.z < bounds_min.z - RESPAWN_MARGIN
+            || pos.z > bounds_max.z + RESPAWN_MARGIN;
 
-            if outside && !self.spawn_points.is_empty() {
-                log::info!("Player fell out of map, respawning");
+        if outside {
+            log::info!("Player fell out of map, respawning");
+            // Use team-specific spawn points if assigned, otherwise use generic
+            if let Some(team) = self.local_team {
+                let spawns = team.spawn_points();
+                if !spawns.is_empty() {
+                    let idx = rand::rng().random_range(0..spawns.len());
+                    let spawn = spawns[idx];
+                    self.player.respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
+                }
+            } else if !self.spawn_points.is_empty() {
                 let idx = rand::rng().random_range(0..self.spawn_points.len());
                 self.player.respawn(self.spawn_points[idx]);
             }
         }
 
         if self.local_team.is_some() {
-            webrtc::send_player_state_to_peer(self.player.position, self.player.yaw);
+            webrtc::send_player_state_to_peers(self.player.position, self.player.yaw);
         }
 
         update_coordinates_display(self.player.position);
@@ -942,19 +934,20 @@ impl GpuState {
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
 
-            if let (Some(remote), Some(pr)) = (&self.remote_player, &self.player_render) {
+            let pr = &self.player_render;
+            pass.set_pipeline(&pr.pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, pr.vertex_buffer.slice(..));
+            pass.set_index_buffer(pr.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            for remote in self.remote_players.values() {
                 let uniform = PlayerUniform {
                     model: remote.model_matrix().to_cols_array_2d(),
                     color: remote.team.color(),
                 };
                 self.queue
                     .write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
-
-                pass.set_pipeline(&pr.pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_bind_group(1, &pr.bind_group, &[]);
-                pass.set_vertex_buffer(0, pr.vertex_buffer.slice(..));
-                pass.set_index_buffer(pr.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..pr.index_count, 0, 0..1);
             }
         }
@@ -1082,17 +1075,15 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let loaded_map = load_glb_from_bytes(EMBEDDED_MAP).ok();
-        if let Some(ref map) = loaded_map {
-            log::info!(
-                "Loaded GLB: {} meshes, {} textures",
-                map.meshes.len(),
-                map.textures.len()
-            );
-        }
+        let loaded_map = load_glb_from_bytes(EMBEDDED_MAP).expect("Failed to load map");
+        log::info!(
+            "Loaded GLB: {} meshes, {} textures",
+            loaded_map.meshes.len(),
+            loaded_map.textures.len()
+        );
         Self {
             gpu_state: None,
-            loaded_map,
+            loaded_map: Some(loaded_map),
         }
     }
 }
@@ -1133,7 +1124,7 @@ impl ApplicationHandler for App {
             })
             .expect("Couldn't append canvas");
 
-        let loaded_map = self.loaded_map.take();
+        let loaded_map = self.loaded_map.take().expect("Map already consumed");
         let window_clone = window.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let state = GpuState::new(window_clone.clone(), loaded_map).await;
@@ -1239,26 +1230,39 @@ fn update_coordinates_display(pos: Vec3) {
     }
 }
 
-fn update_remote_coordinates_display(pos: Option<Vec3>) {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        if let Some(container) = doc.get_element_by_id("remote-coords")
-            && let Some(html_elem) = container.dyn_ref::<web_sys::HtmlElement>()
-        {
-            if pos.is_some() {
-                let _ = html_elem.style().set_property("display", "block");
-            } else {
-                let _ = html_elem.style().set_property("display", "none");
-            }
+fn update_team_counts_display(
+    local_team: Option<Team>,
+    remote_players: &HashMap<u64, RemotePlayer>,
+) {
+    let mut team_a = 0;
+    let mut team_b = 0;
+
+    // Count local player
+    if let Some(team) = local_team {
+        match team {
+            Team::A => team_a += 1,
+            Team::B => team_b += 1,
         }
-        if let Some(pos) = pos
-            && let Some(e) = doc.get_element_by_id("remote-pos")
-        {
-            e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
+    }
+
+    // Count remote players
+    for remote in remote_players.values() {
+        match remote.team {
+            Team::A => team_a += 1,
+            Team::B => team_b += 1,
+        }
+    }
+
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(e) = doc.get_element_by_id("team-a-count") {
+            e.set_text_content(Some(&team_a.to_string()));
+        }
+        if let Some(e) = doc.get_element_by_id("team-b-count") {
+            e.set_text_content(Some(&team_b.to_string()));
         }
     }
 }
 
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -1270,16 +1274,14 @@ pub fn run() {
 
     webrtc::init_webrtc_client();
 
-    webrtc::set_player_state_callback(|position, yaw| {
+    webrtc::set_player_state_callback(|peer_id, position, yaw| {
         GPU_STATE.with(|s| {
             let mut guard = s.borrow_mut();
             let Some(state) = guard.as_mut() else { return };
-            let Some(remote) = state.remote_player.as_mut() else {
-                return;
-            };
-            remote.position = position;
-            remote.yaw = yaw;
-            update_remote_coordinates_display(Some(position));
+            if let Some(remote) = state.remote_players.get_mut(&peer_id) {
+                remote.position = position;
+                remote.yaw = yaw;
+            }
         });
     });
 
@@ -1289,11 +1291,40 @@ pub fn run() {
             let mut guard = s.borrow_mut();
             let Some(state) = guard.as_mut() else { return };
             state.local_team = Some(team);
-            state.remote_player = Some(RemotePlayer::new(if team == Team::A {
-                Team::B
-            } else {
-                Team::A
-            }));
+
+            // Respawn local player at their team's spawn point
+            let spawns = team.spawn_points();
+            if !spawns.is_empty() {
+                let idx = rand::rng().random_range(0..spawns.len());
+                let spawn = spawns[idx];
+                state
+                    .player
+                    .respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
+            }
+
+            update_team_counts_display(state.local_team, &state.remote_players);
+        });
+    });
+
+    webrtc::set_peer_joined_callback(|peer_id, team| {
+        log::info!("Peer {} joined on team {:?}", peer_id, team);
+        GPU_STATE.with(|s| {
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            state
+                .remote_players
+                .insert(peer_id, RemotePlayer::new(team));
+            update_team_counts_display(state.local_team, &state.remote_players);
+        });
+    });
+
+    webrtc::set_peer_left_callback(|peer_id| {
+        log::info!("Peer {} left", peer_id);
+        GPU_STATE.with(|s| {
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            state.remote_players.remove(&peer_id);
+            update_team_counts_display(state.local_team, &state.remote_players);
         });
     });
 
