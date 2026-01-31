@@ -102,10 +102,16 @@
     <div id="connection-status">Connecting to server...</div>
     
     <div id="coordinates">
-        <div class="label">POSITION</div>
+        <div class="label">YOUR POSITION</div>
         <div class="coord"><span class="axis">X:</span> <span class="value" id="coord-x">0.00</span></div>
         <div class="coord"><span class="axis">Y:</span> <span class="value" id="coord-y">0.00</span></div>
         <div class="coord"><span class="axis">Z:</span> <span class="value" id="coord-z">0.00</span></div>
+        <div id="remote-coords" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #45475a;">
+            <div class="label" style="color: #f38ba8;">OTHER PLAYER</div>
+            <div class="coord"><span class="axis">X:</span> <span class="value" id="remote-x">—</span></div>
+            <div class="coord"><span class="axis">Y:</span> <span class="value" id="remote-y">—</span></div>
+            <div class="coord"><span class="axis">Z:</span> <span class="value" id="remote-z">—</span></div>
+        </div>
     </div>
     
     <div class="controls">

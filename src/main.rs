@@ -669,6 +669,32 @@ fn update_coordinates_display(pos: Vec3) {
     }
 }
 
+fn update_remote_coordinates_display(pos: Option<Vec3>) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(container) = doc.get_element_by_id("remote-coords") {
+            if let Some(html_elem) = container.dyn_ref::<web_sys::HtmlElement>() {
+                if pos.is_some() {
+                    let _ = html_elem.style().set_property("display", "block");
+                } else {
+                    let _ = html_elem.style().set_property("display", "none");
+                }
+            }
+        }
+        if let Some(pos) = pos {
+            for (id, val) in [
+                ("remote-x", pos.x),
+                ("remote-y", pos.y),
+                ("remote-z", pos.z),
+            ] {
+                if let Some(e) = doc.get_element_by_id(id) {
+                    e.set_text_content(Some(&format!("{:.2}", val)));
+                }
+            }
+        }
+    }
+}
+
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -689,6 +715,7 @@ pub fn run() {
             };
             remote.position = position;
             remote.yaw = yaw;
+            update_remote_coordinates_display(Some(position));
         });
     });
 
