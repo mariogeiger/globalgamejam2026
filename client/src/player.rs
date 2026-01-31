@@ -145,10 +145,10 @@ impl Player {
             self.velocity.y = 0.0;
         }
         self.on_ground = on_ground;
-        if let Some(y) = ground_y {
-            if self.on_ground {
-                self.position.y = y;
-            }
+        if let Some(y) = ground_y
+            && self.on_ground
+        {
+            self.position.y = y;
         }
     }
 

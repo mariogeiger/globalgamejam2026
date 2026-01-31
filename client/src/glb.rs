@@ -113,9 +113,12 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
             // Collision geometry
             let base_idx = collision_vertices.len() as u32;
             collision_vertices.extend(positions.iter().map(|p| Vec3::new(-p[0], -p[1], p[2])));
-            collision_indices.extend(indices.chunks(3).filter_map(|c| {
-                (c.len() == 3).then(|| [base_idx + c[0], base_idx + c[1], base_idx + c[2]])
-            }));
+            collision_indices.extend(
+                indices
+                    .chunks(3)
+                    .filter(|c| c.len() == 3)
+                    .map(|c| [base_idx + c[0], base_idx + c[1], base_idx + c[2]]),
+            );
         }
     }
 
@@ -171,7 +174,7 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
                 "Unsupported image format {:?}, using placeholder",
                 image.format
             );
-            vec![255, 0, 255, 255].repeat((image.width * image.height) as usize)
+            [255, 0, 255, 255].repeat((image.width * image.height) as usize)
         }
     }
 }

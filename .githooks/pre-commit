@@ -1,9 +1,8 @@
 #!/bin/sh
-# Pre-commit hook to run cargo fmt
+# Pre-commit hook to run cargo fmt and clippy
 
 # Run cargo fmt and check if there are changes
-cargo fmt --all -- --check
-if [ $? -ne 0 ]; then
+if ! cargo fmt --all -- --check; then
     echo ""
     echo "❌ Code is not formatted. Running cargo fmt..."
     echo ""
@@ -12,5 +11,22 @@ if [ $? -ne 0 ]; then
     echo "✅ Code formatted. Please review and stage the changes, then commit again."
     exit 1
 fi
-
 echo "✅ Code formatting check passed"
+
+# Run clippy on client (wasm32)
+echo "Running clippy on client..."
+if ! cargo clippy -p globalgamejam2026 --target wasm32-unknown-unknown -- -D warnings; then
+    echo "❌ Clippy found issues in client"
+    exit 1
+fi
+echo "✅ Client clippy passed"
+
+# Run clippy on server (native)
+echo "Running clippy on server..."
+if ! cargo clippy -p server -- -D warnings; then
+    echo "❌ Clippy found issues in server"
+    exit 1
+fi
+echo "✅ Server clippy passed"
+
+echo "✅ All checks passed"

@@ -162,10 +162,10 @@ fn handle_message(
                 s.peers.get(&client_id).copied()
             };
 
-            if let Some(peer_id) = peer_id {
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    send_to_client(peer_id, &json, senders);
-                }
+            if let Some(peer_id) = peer_id
+                && let Ok(json) = serde_json::to_string(&msg)
+            {
+                send_to_client(peer_id, &json, senders);
             }
         }
         _ => {}
