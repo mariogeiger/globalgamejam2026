@@ -68,7 +68,7 @@ fn run_http_server(port: u16) {
 }
 
 fn get_file_path(url_path: &str) -> String {
-    let dist_dir = "../client/dist";
+    let dist_dir = "client/dist";
 
     let clean_path = url_path.trim_start_matches('/');
     let clean_path = clean_path.split('?').next().unwrap_or(clean_path);

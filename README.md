@@ -61,15 +61,19 @@ Then open http://localhost:8080
 ## Production
 
 ```bash
-# Build WASM client → dist/
-cd client && trunk build --release
+# Build WASM client → client/dist/
+cd client && trunk build --release && cd ..
 
 # Build native server
 cargo build -p server --release
 
-# Run server (serves static files from dist/)
+# Run server (serves static files from client/dist/)
 ./target/release/server
 ```
+
+Then open http://localhost:8080
+
+> **Note:** WebGPU requires a secure context. Access via `localhost` works, but LAN IPs (e.g. `192.168.x.x`) require HTTPS.
 
 ## Ports
 
