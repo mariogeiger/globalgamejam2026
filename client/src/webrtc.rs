@@ -636,13 +636,8 @@ thread_local! {
 }
 
 pub fn init_webrtc_client() {
-    match WebRtcClient::new() {
-        Ok(client) => WEBRTC_CLIENT.with(|c| *c.borrow_mut() = Some(client)),
-        Err(e) => {
-            log::error!("Failed to create WebRTC client: {:?}", e);
-            update_status("Failed to connect to server");
-        }
-    }
+    let client = WebRtcClient::new().expect("Failed to create WebRTC client");
+    WEBRTC_CLIENT.with(|c| *c.borrow_mut() = Some(client));
 }
 
 pub fn send_player_state_to_peers(position: Vec3, yaw: f32) {
