@@ -64,12 +64,49 @@
         }
         .team-a { color: #89b4fa; }
         .team-b { color: #f38ba8; }
+        #coordinates {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(30, 30, 46, 0.9);
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: #a6e3a1;
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            font-size: 13px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            min-width: 180px;
+        }
+        #coordinates .label {
+            color: #6c7086;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        #coordinates .coord {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 0;
+        }
+        #coordinates .axis {
+            color: #89b4fa;
+        }
+        #coordinates .value {
+            color: #a6e3a1;
+        }
     </style>
 </head>
 <body>
     <div id="wasm-container"></div>
     
     <div id="connection-status">Connecting to server...</div>
+    
+    <div id="coordinates">
+        <div class="label">POSITION</div>
+        <div class="coord"><span class="axis">X:</span> <span class="value" id="coord-x">0.00</span></div>
+        <div class="coord"><span class="axis">Y:</span> <span class="value" id="coord-y">0.00</span></div>
+        <div class="coord"><span class="axis">Z:</span> <span class="value" id="coord-z">0.00</span></div>
+    </div>
     
     <div class="controls">
         <h4>Two Player Game</h4>

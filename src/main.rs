@@ -619,6 +619,9 @@ impl GpuState {
         if self.local_team.is_some() {
             webrtc::send_player_state_to_peer(self.player.position, self.player.yaw);
         }
+
+        // Update coordinate display
+        update_coordinates_display(self.player.position);
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -907,6 +910,22 @@ thread_local! {
 }
 
 use wasm_bindgen::prelude::*;
+
+fn update_coordinates_display(position: Vec3) {
+    if let Some(window) = web_sys::window() {
+        if let Some(document) = window.document() {
+            if let Some(elem) = document.get_element_by_id("coord-x") {
+                elem.set_text_content(Some(&format!("{:.2}", position.x)));
+            }
+            if let Some(elem) = document.get_element_by_id("coord-y") {
+                elem.set_text_content(Some(&format!("{:.2}", position.y)));
+            }
+            if let Some(elem) = document.get_element_by_id("coord-z") {
+                elem.set_text_content(Some(&format!("{:.2}", position.z)));
+            }
+        }
+    }
+}
 
 #[wasm_bindgen(start)]
 pub fn run() {
