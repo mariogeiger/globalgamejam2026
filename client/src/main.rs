@@ -26,8 +26,9 @@ use config::RESPAWN_MARGIN;
 use glb::load_glb_from_bytes;
 use gpu::{
     camera_bind_group_layout, create_depth_texture, create_index_buffer,
-    create_placeholder_bind_group, create_texture_with_bind_group, create_uniform_buffer,
-    create_vertex_buffer, texture_bind_group_layout, uniform_bind_group_layout,
+    create_placeholder_bind_group, create_render_target_texture, create_texture_with_bind_group,
+    create_uniform_buffer, create_vertex_buffer, texture_bind_group_layout,
+    uniform_bind_group_layout,
 };
 use map::{LoadedMap, MapVertex};
 use player::{Player, PlayerUniform, PlayerVertex, RemotePlayer, Team, generate_player_box};
@@ -38,6 +39,45 @@ const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+}
+
+/// Post-processing: motion blur (direction, strength) and smear (previous-frame blend).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct PostProcessUniform {
+    blur_direction: [f32; 2],
+    blur_strength: f32,
+    /// How much of the previous frame to blend (0 = no smear, ~0.9 = strong trails).
+    smear_factor: f32,
+}
+
+/// Fullscreen quad for post-processing pass (position + uv).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct PostProcessVertex {
+    position: [f32; 2],
+    tex_coord: [f32; 2],
+}
+
+impl PostProcessVertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<PostProcessVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as u64,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        }
+    }
 }
 
 struct MapRenderData {
@@ -76,6 +116,27 @@ struct GpuState {
     local_team: Option<Team>,
     remote_player: Option<RemotePlayer>,
     player_render: Option<PlayerRenderData>,
+    // Post-processing: scene render target and fullscreen pass
+    offscreen_texture: wgpu::Texture,
+    offscreen_view: wgpu::TextureView,
+    postprocess_pipeline: wgpu::RenderPipeline,
+    postprocess_bind_group: wgpu::BindGroup,
+    postprocess_uniform_buffer: wgpu::Buffer,
+    postprocess_uniform_bind_group: wgpu::BindGroup,
+    postprocess_previous_bind_group_0: wgpu::BindGroup,
+    postprocess_previous_bind_group_1: wgpu::BindGroup,
+    postprocess_sampler: wgpu::Sampler,
+    fullscreen_quad_buffer: wgpu::Buffer,
+    // History buffers for previous-frame smearing (ping-pong)
+    history_texture_0: wgpu::Texture,
+    history_view_0: wgpu::TextureView,
+    history_texture_1: wgpu::Texture,
+    history_view_1: wgpu::TextureView,
+    history_index: u8,
+    present_pipeline: wgpu::RenderPipeline,
+    present_bind_group_0: wgpu::BindGroup,
+    present_bind_group_1: wgpu::BindGroup,
+    first_frame: bool,
 }
 
 impl GpuState {
@@ -129,6 +190,26 @@ impl GpuState {
         surface.configure(&device, &config);
 
         let (_, depth_view) = create_depth_texture(&device, width, height);
+
+        let (offscreen_texture, offscreen_view) = create_render_target_texture(
+            &device,
+            width,
+            height,
+            config.format,
+        );
+
+        let (history_texture_0, history_view_0) = create_render_target_texture(
+            &device,
+            width,
+            height,
+            config.format,
+        );
+        let (history_texture_1, history_view_1) = create_render_target_texture(
+            &device,
+            width,
+            height,
+            config.format,
+        );
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Map Shader"),
@@ -203,6 +284,217 @@ impl GpuState {
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
+        });
+
+        // Post-processing: fullscreen pass over scene texture
+        let postprocess_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Postprocess Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
+        });
+        let postprocess_texture_layout = texture_bind_group_layout(&device);
+        let postprocess_uniform_layout =
+            uniform_bind_group_layout(&device, "Postprocess Uniform Layout");
+        let postprocess_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Postprocess Pipeline Layout"),
+                bind_group_layouts: &[
+                    &postprocess_texture_layout,
+                    &postprocess_uniform_layout,
+                    &postprocess_texture_layout,
+                ],
+                immediate_size: 0,
+            });
+        let postprocess_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Postprocess Pipeline"),
+            layout: Some(&postprocess_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &postprocess_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[PostProcessVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &postprocess_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let postprocess_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Postprocess Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let postprocess_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Postprocess Bind Group (scene)"),
+            layout: &postprocess_texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&offscreen_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&postprocess_sampler),
+                },
+            ],
+        });
+        let postprocess_previous_bind_group_0 =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Postprocess Previous Bind Group 0"),
+                layout: &postprocess_texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&history_view_0),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&postprocess_sampler),
+                    },
+                ],
+            });
+        let postprocess_previous_bind_group_1 =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Postprocess Previous Bind Group 1"),
+                layout: &postprocess_texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&history_view_1),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&postprocess_sampler),
+                    },
+                ],
+            });
+        let postprocess_uniform = PostProcessUniform {
+            blur_direction: [0.0, 0.0],
+            blur_strength: 0.0,
+            smear_factor: 0.85,
+        };
+        let postprocess_uniform_buffer =
+            create_uniform_buffer(&device, &postprocess_uniform, "Postprocess Uniform");
+        let postprocess_uniform_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Postprocess Uniform Bind Group"),
+                layout: &postprocess_uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: postprocess_uniform_buffer.as_entire_binding(),
+                }],
+            });
+        const FULLSCREEN_QUAD: [PostProcessVertex; 6] = [
+            PostProcessVertex {
+                position: [-1.0, -1.0],
+                tex_coord: [0.0, 1.0],
+            },
+            PostProcessVertex {
+                position: [1.0, -1.0],
+                tex_coord: [1.0, 1.0],
+            },
+            PostProcessVertex {
+                position: [-1.0, 1.0],
+                tex_coord: [0.0, 0.0],
+            },
+            PostProcessVertex {
+                position: [1.0, -1.0],
+                tex_coord: [1.0, 1.0],
+            },
+            PostProcessVertex {
+                position: [1.0, 1.0],
+                tex_coord: [1.0, 0.0],
+            },
+            PostProcessVertex {
+                position: [-1.0, 1.0],
+                tex_coord: [0.0, 0.0],
+            },
+        ];
+        let fullscreen_quad_buffer =
+            create_vertex_buffer(&device, &FULLSCREEN_QUAD, "Fullscreen Quad");
+
+        // Present pass: blit history texture to swapchain
+        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Present Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+        });
+        let present_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Present Pipeline Layout"),
+                bind_group_layouts: &[&postprocess_texture_layout],
+                immediate_size: 0,
+            });
+        let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Present Pipeline"),
+            layout: Some(&present_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &present_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[PostProcessVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &present_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let present_bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Present Bind Group 0"),
+            layout: &postprocess_texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&history_view_0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&postprocess_sampler),
+                },
+            ],
+        });
+        let present_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Present Bind Group 1"),
+            layout: &postprocess_texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&history_view_1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&postprocess_sampler),
+                },
+            ],
         });
 
         let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) =
@@ -360,6 +652,25 @@ impl GpuState {
             local_team: None,
             remote_player: None,
             player_render,
+            offscreen_texture,
+            offscreen_view,
+            postprocess_pipeline,
+            postprocess_bind_group,
+            postprocess_uniform_buffer,
+            postprocess_uniform_bind_group,
+            postprocess_previous_bind_group_0,
+            postprocess_previous_bind_group_1,
+            postprocess_sampler,
+            fullscreen_quad_buffer,
+            history_texture_0,
+            history_view_0,
+            history_texture_1,
+            history_view_1,
+            history_index: 0,
+            present_pipeline,
+            present_bind_group_0,
+            present_bind_group_1,
+            first_frame: true,
         }
     }
 
@@ -371,6 +682,106 @@ impl GpuState {
             let (_, depth_view) =
                 create_depth_texture(&self.device, new_size.width, new_size.height);
             self.depth_view = depth_view;
+            let (offscreen_texture, offscreen_view) = create_render_target_texture(
+                &self.device,
+                new_size.width,
+                new_size.height,
+                self.config.format,
+            );
+            self.offscreen_texture = offscreen_texture;
+            self.offscreen_view = offscreen_view;
+
+            let (history_texture_0, history_view_0) = create_render_target_texture(
+                &self.device,
+                new_size.width,
+                new_size.height,
+                self.config.format,
+            );
+            let (history_texture_1, history_view_1) = create_render_target_texture(
+                &self.device,
+                new_size.width,
+                new_size.height,
+                self.config.format,
+            );
+            self.history_texture_0 = history_texture_0;
+            self.history_view_0 = history_view_0;
+            self.history_texture_1 = history_texture_1;
+            self.history_view_1 = history_view_1;
+
+            let postprocess_texture_layout = texture_bind_group_layout(&self.device);
+            self.postprocess_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Postprocess Bind Group (scene)"),
+                layout: &postprocess_texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.offscreen_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.postprocess_sampler),
+                    },
+                ],
+            });
+            self.postprocess_previous_bind_group_0 =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Postprocess Previous Bind Group 0"),
+                    layout: &postprocess_texture_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.history_view_0),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.postprocess_sampler),
+                        },
+                    ],
+                });
+            self.postprocess_previous_bind_group_1 =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Postprocess Previous Bind Group 1"),
+                    layout: &postprocess_texture_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.history_view_1),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.postprocess_sampler),
+                        },
+                    ],
+                });
+            self.present_bind_group_0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Present Bind Group 0"),
+                layout: &postprocess_texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.history_view_0),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.postprocess_sampler),
+                    },
+                ],
+            });
+            self.present_bind_group_1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Present Bind Group 1"),
+                layout: &postprocess_texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.history_view_1),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.postprocess_sampler),
+                    },
+                ],
+            });
+            self.first_frame = true;
         }
     }
 
@@ -437,11 +848,12 @@ impl GpuState {
                 label: Some("Render Encoder"),
             });
 
+        // Pass 1: render scene to offscreen texture
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
+                label: Some("Scene Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.offscreen_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -493,6 +905,112 @@ impl GpuState {
                 pass.draw_indexed(0..pr.index_count, 0, 0..1);
             }
         }
+
+        // Motion blur: direction from horizontal velocity, strength from speed (UV-space scale)
+        let vel_xz = glam::Vec2::new(self.player.velocity.x, self.player.velocity.z);
+        let speed = vel_xz.length();
+        let (blur_direction, blur_strength) = if speed > 1.0 {
+            let dir = vel_xz.normalize();
+            // Scale so ~300 units/s gives ~0.02 UV offset
+            let strength = (speed / 300.0) * 0.02f32;
+            ([dir.x, dir.y], strength)
+        } else {
+            ([0.0f32, 0.0], 0.0)
+        };
+        let smear_factor = if self.first_frame { 0.0 } else { 0.85 };
+        self.first_frame = false;
+
+        self.queue.write_buffer(
+            &self.postprocess_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[PostProcessUniform {
+                blur_direction,
+                blur_strength,
+                smear_factor,
+            }]),
+        );
+
+        let prev_idx = self.history_index as usize;
+        let next_idx = 1 - prev_idx;
+        let history_next_view = if next_idx == 0 {
+            &self.history_view_0
+        } else {
+            &self.history_view_1
+        };
+        let postprocess_previous_bind_group = if prev_idx == 0 {
+            &self.postprocess_previous_bind_group_0
+        } else {
+            &self.postprocess_previous_bind_group_1
+        };
+        let present_bind_group = if next_idx == 0 {
+            &self.present_bind_group_0
+        } else {
+            &self.present_bind_group_1
+        };
+
+        // Pass 2: post-process (scene + previous) → history buffer
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Postprocess Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: history_next_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(&self.postprocess_pipeline);
+            pass.set_bind_group(0, &self.postprocess_bind_group, &[]);
+            pass.set_bind_group(1, &self.postprocess_uniform_bind_group, &[]);
+            pass.set_bind_group(2, postprocess_previous_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.fullscreen_quad_buffer.slice(..));
+            pass.draw(0..6, 0..1);
+        }
+
+        // Pass 3: present history → swapchain
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Present Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(&self.present_pipeline);
+            pass.set_bind_group(0, present_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.fullscreen_quad_buffer.slice(..));
+            pass.draw(0..6, 0..1);
+        }
+
+        self.history_index = next_idx as u8;
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
