@@ -28,8 +28,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+      - name: Clippy (client)
+        run: cargo clippy -p globalgamejam2026 --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Clippy (server)
+        run: cargo clippy -p server -- -D warnings
 
   build:
     name: Build
@@ -48,5 +51,9 @@ jobs:
       - name: Install trunk
         uses: jetli/trunk-action@v0.5.1
 
-      - name: Build
+      - name: Build client
         run: trunk build --release
+        working-directory: client
+
+      - name: Build server
+        run: cargo build -p server --release

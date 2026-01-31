@@ -602,9 +602,9 @@ impl ApplicationHandler for App {
                         if let Some(state) = s.borrow_mut().as_mut() {
                             match event.state {
                                 ElementState::Pressed if key == KeyCode::Escape => {
-                                    web_sys::window()
-                                        .and_then(|w| w.document())
-                                        .map(|d| d.exit_pointer_lock());
+                                    if let Some(d) = web_sys::window().and_then(|w| w.document()) {
+                                        d.exit_pointer_lock();
+                                    }
                                     state.cursor_grabbed = false;
                                 }
                                 ElementState::Pressed => state.player.handle_key_press(key),
@@ -620,18 +620,18 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                web_sys::window()
+                if let Some(canvas) = web_sys::window()
                     .and_then(|w| w.document())
                     .and_then(|d| d.get_element_by_id("wasm-container"))
                     .and_then(|c| c.first_element_child())
-                    .map(|canvas| {
-                        canvas.request_pointer_lock();
-                        GPU_STATE.with(|s| {
-                            if let Some(state) = s.borrow_mut().as_mut() {
-                                state.cursor_grabbed = true;
-                            }
-                        });
+                {
+                    canvas.request_pointer_lock();
+                    GPU_STATE.with(|s| {
+                        if let Some(state) = s.borrow_mut().as_mut() {
+                            state.cursor_grabbed = true;
+                        }
                     });
+                }
             }
             WindowEvent::RedrawRequested => {
                 GPU_STATE.with(|s| {

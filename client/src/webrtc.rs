@@ -81,10 +81,10 @@ impl WebRtcClient {
         let state_clone = state.clone();
         let ws_clone = ws.clone();
         set_callback(&ws, "onmessage", move |ev: MessageEvent| {
-            if let Some(text) = ev.data().as_string() {
-                if let Ok(msg) = serde_json::from_str::<SignalMessage>(&text) {
-                    handle_signal(&ws_clone, &state_clone, msg);
-                }
+            if let Some(text) = ev.data().as_string()
+                && let Ok(msg) = serde_json::from_str::<SignalMessage>(&text)
+            {
+                handle_signal(&ws_clone, &state_clone, msg);
             }
         });
 
@@ -103,12 +103,11 @@ impl WebRtcClient {
 
     pub fn send_player_state(&self, position: Vec3, yaw: f32) {
         let state = self.state.borrow();
-        if let Some(ref dc) = state.data_channel {
-            if dc.ready_state() == web_sys::RtcDataChannelState::Open {
-                if let Ok(json) = serde_json::to_string(&PlayerStateMessage::new(position, yaw)) {
-                    let _ = dc.send_with_str(&json);
-                }
-            }
+        if let Some(ref dc) = state.data_channel
+            && dc.ready_state() == web_sys::RtcDataChannelState::Open
+            && let Ok(json) = serde_json::to_string(&PlayerStateMessage::new(position, yaw))
+        {
+            let _ = dc.send_with_str(&json);
         }
     }
 
@@ -157,32 +156,30 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
                 }
             }
             "offer" => {
-                if let Some(sdp) = msg.sdp {
-                    if let Ok(pc) = create_peer_connection(&ws, &state) {
-                        state.borrow_mut().pc = Some(pc.clone());
+                if let Some(sdp) = msg.sdp
+                    && let Ok(pc) = create_peer_connection(&ws, &state)
+                {
+                    state.borrow_mut().pc = Some(pc.clone());
 
-                        let desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
-                        desc.set_sdp(&sdp);
-                        if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc))
-                            .await
-                            .is_ok()
+                    let desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
+                    desc.set_sdp(&sdp);
+                    if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc))
+                        .await
+                        .is_ok()
+                    {
+                        apply_pending_candidates(&pc, &state).await;
+
+                        if let Ok(answer) =
+                            wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await
                         {
-                            apply_pending_candidates(&pc, &state).await;
-
-                            if let Ok(answer) =
-                                wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await
-                            {
-                                let answer_sdp = get_sdp(&answer);
-                                let init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-                                init.set_sdp(&answer_sdp);
-                                if wasm_bindgen_futures::JsFuture::from(
-                                    pc.set_local_description(&init),
-                                )
+                            let answer_sdp = get_sdp(&answer);
+                            let init = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+                            init.set_sdp(&answer_sdp);
+                            if wasm_bindgen_futures::JsFuture::from(pc.set_local_description(&init))
                                 .await
                                 .is_ok()
-                                {
-                                    send_signal(&ws, "answer", Some(&answer_sdp), None);
-                                }
+                            {
+                                send_signal(&ws, "answer", Some(&answer_sdp), None);
                             }
                         }
                     }
@@ -190,10 +187,8 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
             }
             "answer" => {
                 if let Some(sdp) = msg.sdp {
-                    let state_ref = state.borrow();
-                    if let Some(ref pc) = state_ref.pc {
-                        let pc = pc.clone();
-                        drop(state_ref);
+                    let pc = state.borrow().pc.clone();
+                    if let Some(pc) = pc {
                         let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
                         desc.set_sdp(&sdp);
                         if wasm_bindgen_futures::JsFuture::from(pc.set_remote_description(&desc))
@@ -207,15 +202,16 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: SignalMessage) {
             }
             "ice-candidate" => {
                 if msg.candidate.is_some() {
-                    let has_remote = state
-                        .borrow()
-                        .pc
-                        .as_ref()
-                        .map(|pc| pc.remote_description().is_some())
-                        .unwrap_or(false);
+                    let (has_remote, pc) = {
+                        let s = state.borrow();
+                        let has =
+                            s.pc.as_ref()
+                                .is_some_and(|pc| pc.remote_description().is_some());
+                        (has, s.pc.clone())
+                    };
                     if has_remote {
-                        if let Some(ref pc) = state.borrow().pc {
-                            add_ice_candidate(pc, &msg).await;
+                        if let Some(pc) = pc {
+                            add_ice_candidate(&pc, &msg).await;
                         }
                     } else {
                         state.borrow_mut().pending_candidates.push(msg);
@@ -322,10 +318,9 @@ fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef) {
 
         if msg.msg_type == "player_state"
             && let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw)
+            && let Some(ref cb) = state_clone.borrow().on_player_state
         {
-            if let Some(ref cb) = state_clone.borrow().on_player_state {
-                cb(Vec3::new(x, y, z), yaw);
-            }
+            cb(Vec3::new(x, y, z), yaw);
         }
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onmessage(Some(onmsg.as_ref().unchecked_ref()));
