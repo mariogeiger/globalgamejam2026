@@ -367,18 +367,16 @@ fn create_peer_connection(
     on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
     connected: &Rc<RefCell<bool>>,
 ) -> Result<RtcPeerConnection, JsValue> {
-    // Configure with multiple STUN servers for NAT traversal
-    // TURN servers require credentials - free ones are unreliable
+    // Configure with STUN servers for NAT traversal
     let config = RtcConfiguration::new();
     let ice_servers = js_sys::Array::new();
     
-    // Multiple STUN servers for better connectivity
+    // STUN servers (including our own + Google fallbacks)
     let stun_urls = js_sys::Array::new();
+    stun_urls.push(&"stun:ggj26.cheapmo.ch:3478".into());  // Our own STUN server
     stun_urls.push(&"stun:stun.l.google.com:19302".into());
     stun_urls.push(&"stun:stun1.l.google.com:19302".into());
     stun_urls.push(&"stun:stun2.l.google.com:19302".into());
-    stun_urls.push(&"stun:stun3.l.google.com:19302".into());
-    stun_urls.push(&"stun:stun4.l.google.com:19302".into());
     
     let stun_server = js_sys::Object::new();
     js_sys::Reflect::set(&stun_server, &"urls".into(), &stun_urls)?;

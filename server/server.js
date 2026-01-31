@@ -1,11 +1,32 @@
 import { WebSocketServer } from 'ws';
+import stun from 'stun';
 
-const PORT = process.env.PORT || 9000;
-const wss = new WebSocketServer({ host: '0.0.0.0', port: PORT });
+const WS_PORT = process.env.PORT || 9000;
+const STUN_PORT = process.env.STUN_PORT || 3478;
+
+// WebSocket signaling server
+const wss = new WebSocketServer({ host: '0.0.0.0', port: WS_PORT });
 
 let waitingClient = null;
 
-console.log(`Signaling server running on port ${PORT}`);
+console.log(`Signaling server running on port ${WS_PORT}`);
+
+// STUN server (UDP)
+const stunServer = stun.createServer({ type: 'udp4' });
+
+stunServer.on('bindingRequest', (request, rinfo) => {
+    const response = stun.createMessage(stun.constants.STUN_BINDING_RESPONSE);
+    response.setTransactionID(request.transactionId);
+    
+    // Add XOR-MAPPED-ADDRESS attribute with client's public address
+    response.addXorAddress(rinfo.address, rinfo.port);
+    
+    stunServer.send(response, rinfo.port, rinfo.address);
+});
+
+stunServer.listen(STUN_PORT, '0.0.0.0', () => {
+    console.log(`STUN server running on UDP port ${STUN_PORT}`);
+});
 
 wss.on('connection', (ws) => {
     console.log('Client connected');
