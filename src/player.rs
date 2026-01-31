@@ -74,26 +74,35 @@ impl Player {
         self.mouse_delta = (0.0, 0.0);
 
         // Movement vectors
-        let forward = Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()).normalize();
-        let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize();
+        let (sin, cos) = (self.yaw.sin(), self.yaw.cos());
+        let forward = Vec3::new(sin, 0.0, -cos);
+        let right = Vec3::new(cos, 0.0, sin);
 
-        let mut move_dir = Vec3::ZERO;
-        if self.pressed_keys.contains(&KeyCode::KeyW) {
-            move_dir += forward;
-        }
-        if self.pressed_keys.contains(&KeyCode::KeyS) {
-            move_dir -= forward;
-        }
-        if self.pressed_keys.contains(&KeyCode::KeyD) {
-            move_dir += right;
-        }
-        if self.pressed_keys.contains(&KeyCode::KeyA) {
-            move_dir -= right;
-        }
+        // Build movement direction from pressed keys
+        let key = |k| self.pressed_keys.contains(&k);
+        let move_dir = Vec3::ZERO
+            + if key(KeyCode::KeyW) {
+                forward
+            } else {
+                Vec3::ZERO
+            }
+            - if key(KeyCode::KeyS) {
+                forward
+            } else {
+                Vec3::ZERO
+            }
+            + if key(KeyCode::KeyD) {
+                right
+            } else {
+                Vec3::ZERO
+            }
+            - if key(KeyCode::KeyA) {
+                right
+            } else {
+                Vec3::ZERO
+            };
 
-        if move_dir.length_squared() > 0.0 {
-            move_dir = move_dir.normalize();
-        }
+        let move_dir = move_dir.normalize_or_zero();
 
         if self.on_ground {
             self.velocity.x = move_dir.x * MOVE_SPEED;

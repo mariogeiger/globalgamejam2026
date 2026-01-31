@@ -3,8 +3,8 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use web_sys::{
     MessageEvent, RtcConfiguration, RtcDataChannel, RtcDataChannelEvent, RtcIceCandidate,
     RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
@@ -313,15 +313,18 @@ fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef) {
     let state_clone = state.clone();
     let onmsg = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: MessageEvent = ev.unchecked_into();
-        if let Some(data) = ev.data().as_string() {
-            if let Ok(msg) = serde_json::from_str::<GameMessage>(&data) {
-                if msg.msg_type == "player_state" {
-                    if let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw) {
-                        if let Some(ref cb) = state_clone.borrow().on_player_state {
-                            cb(Vec3::new(x, y, z), yaw);
-                        }
-                    }
-                }
+        let Some(data) = ev.data().as_string() else {
+            return;
+        };
+        let Ok(msg) = serde_json::from_str::<GameMessage>(&data) else {
+            return;
+        };
+
+        if msg.msg_type == "player_state"
+            && let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw)
+        {
+            if let Some(ref cb) = state_clone.borrow().on_player_state {
+                cb(Vec3::new(x, y, z), yaw);
             }
         }
     }) as Box<dyn FnMut(JsValue)>);

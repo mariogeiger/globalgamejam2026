@@ -57,10 +57,9 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
-            let positions: Vec<[f32; 3]> = reader
-                .read_positions()
-                .map(|i| i.collect())
-                .unwrap_or_default();
+            let Some(positions) = reader.read_positions().map(|i| i.collect::<Vec<_>>()) else {
+                continue;
+            };
             if positions.is_empty() {
                 continue;
             }

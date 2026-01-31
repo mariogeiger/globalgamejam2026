@@ -30,7 +30,7 @@ use gpu::{
     create_vertex_buffer, texture_bind_group_layout, uniform_bind_group_layout,
 };
 use map::{LoadedMap, MapVertex};
-use player::{generate_player_box, Player, PlayerUniform, PlayerVertex, RemotePlayer, Team};
+use player::{Player, PlayerUniform, PlayerVertex, RemotePlayer, Team, generate_player_box};
 
 const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
 
@@ -571,18 +571,19 @@ impl ApplicationHandler for App {
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            GPU_STATE.with(|s| {
-                if let Some(state) = s.borrow_mut().as_mut() {
-                    if state.cursor_grabbed {
-                        state
-                            .player
-                            .handle_mouse_move(delta.0 as f32, delta.1 as f32);
-                        state.window.request_redraw();
-                    }
-                }
-            });
-        }
+        let DeviceEvent::MouseMotion { delta } = event else {
+            return;
+        };
+        GPU_STATE.with(|s| {
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            if state.cursor_grabbed {
+                state
+                    .player
+                    .handle_mouse_move(delta.0 as f32, delta.1 as f32);
+                state.window.request_redraw();
+            }
+        });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -681,25 +682,27 @@ pub fn run() {
 
     webrtc::set_player_state_callback(|position, yaw| {
         GPU_STATE.with(|s| {
-            if let Some(state) = s.borrow_mut().as_mut() {
-                if let Some(ref mut remote) = state.remote_player {
-                    remote.position = position;
-                    remote.yaw = yaw;
-                }
-            }
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            let Some(remote) = state.remote_player.as_mut() else {
+                return;
+            };
+            remote.position = position;
+            remote.yaw = yaw;
         });
     });
 
     webrtc::set_team_assign_callback(|team| {
-        log::info!("Assigned to team: {:?}", team);
+        log::info!("Assigned to team: {team:?}");
         GPU_STATE.with(|s| {
-            if let Some(state) = s.borrow_mut().as_mut() {
-                state.local_team = Some(team);
-                state.remote_player = Some(RemotePlayer::new(match team {
-                    Team::A => Team::B,
-                    Team::B => Team::A,
-                }));
-            }
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            state.local_team = Some(team);
+            state.remote_player = Some(RemotePlayer::new(if team == Team::A {
+                Team::B
+            } else {
+                Team::A
+            }));
         });
     });
 

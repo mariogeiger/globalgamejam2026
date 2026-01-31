@@ -15,15 +15,12 @@ impl PhysicsWorld {
             return None;
         }
 
-        // parry3d 0.26 uses glam Vec3 directly
         let vertices: Vec<Vector> = collision_vertices
             .iter()
             .map(|v| Vector::new(v.x, v.y, v.z))
             .collect();
 
-        let trimesh =
-            TriMesh::new(vertices, collision_indices.to_vec()).expect("Failed to create trimesh");
-
+        let trimesh = TriMesh::new(vertices, collision_indices.to_vec()).ok()?;
         Some(Self { trimesh })
     }
 
