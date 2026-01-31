@@ -321,23 +321,40 @@ impl GpuState {
                 model: Mat4::IDENTITY.to_cols_array_2d(),
                 color: [1.0, 0.0, 0.0, 1.0],
             };
+            let uniform_buffer = create_uniform_buffer(&device, &uniform, "Player Uniform");
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Player Bind Group"),
+                layout: &player_uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
 
             Some(PlayerRenderData {
                 vertex_buffer: create_vertex_buffer(&device, &vertices, "Player Vertex"),
                 index_buffer: create_index_buffer(&device, &indices, "Player Index"),
                 index_count: indices.len() as u32,
                 pipeline: player_pipeline,
-                uniform_buffer: create_uniform_buffer(&device, &uniform, "Player Uniform"),
-                bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Player Bind Group"),
-                    layout: &player_uniform_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: create_uniform_buffer(&device, &uniform, "Player Uniform")
-                            .as_entire_binding(),
-                    }],
-                }),
+                uniform_buffer,
+                bind_group,
             })
+        };
+
+        // Spawn a debug mannequin on Team A (same as local player default)
+        // Uses team-specific spawn points
+        let debug_mannequin = {
+            let team = Team::A;
+            let spawns = team.spawn_points();
+            if !spawns.is_empty() {
+                let spawn = spawns[0];
+                let mut mannequin = RemotePlayer::new(team);
+                mannequin.position = Vec3::new(spawn[0], spawn[1], spawn[2]);
+                mannequin.yaw = 0.0;
+                Some(mannequin)
+            } else {
+                None
+            }
         };
 
         Self {
@@ -358,7 +375,7 @@ impl GpuState {
             spawn_points,
             map_bounds,
             local_team: None,
-            remote_player: None,
+            remote_player: debug_mannequin,
             player_render,
         }
     }
@@ -397,10 +414,20 @@ impl GpuState {
                 || pos.z < bounds_min.z - RESPAWN_MARGIN
                 || pos.z > bounds_max.z + RESPAWN_MARGIN;
 
-            if outside && !self.spawn_points.is_empty() {
+            if outside {
                 log::info!("Player fell out of map, respawning");
-                let idx = rand::rng().random_range(0..self.spawn_points.len());
-                self.player.respawn(self.spawn_points[idx]);
+                // Use team-specific spawn points if assigned, otherwise use generic
+                if let Some(team) = self.local_team {
+                    let spawns = team.spawn_points();
+                    if !spawns.is_empty() {
+                        let idx = rand::rng().random_range(0..spawns.len());
+                        let spawn = spawns[idx];
+                        self.player.respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
+                    }
+                } else if !self.spawn_points.is_empty() {
+                    let idx = rand::rng().random_range(0..self.spawn_points.len());
+                    self.player.respawn(self.spawn_points[idx]);
+                }
             }
         }
 
@@ -714,11 +741,20 @@ pub fn run() {
             let mut guard = s.borrow_mut();
             let Some(state) = guard.as_mut() else { return };
             state.local_team = Some(team);
-            state.remote_player = Some(RemotePlayer::new(if team == Team::A {
-                Team::B
-            } else {
-                Team::A
-            }));
+
+            // Respawn local player at their team's spawn point
+            let spawns = team.spawn_points();
+            if !spawns.is_empty() {
+                let idx = rand::rng().random_range(0..spawns.len());
+                let spawn = spawns[idx];
+                state
+                    .player
+                    .respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
+            }
+
+            // Remote player is on the opposite team
+            let remote_team = if team == Team::A { Team::B } else { Team::A };
+            state.remote_player = Some(RemotePlayer::new(remote_team));
         });
     });
 
