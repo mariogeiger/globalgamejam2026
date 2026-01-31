@@ -2,6 +2,7 @@ use bytemuck::Pod;
 use wgpu::util::DeviceExt;
 
 /// Create a texture, upload data, create view and bind group
+#[allow(clippy::too_many_arguments)]
 pub fn create_texture_with_bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
