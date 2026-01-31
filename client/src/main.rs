@@ -74,7 +74,7 @@ struct GpuState {
     spawn_points: Vec<Vec3>,
     map_bounds: Option<(Vec3, Vec3)>,
     local_team: Option<Team>,
-    remote_player: Option<RemotePlayer>,
+    remote_players: HashMap<u64, RemotePlayer>,
     player_render: Option<PlayerRenderData>,
 }
 
@@ -341,22 +341,6 @@ impl GpuState {
             })
         };
 
-        // Spawn a debug mannequin on Team A (same as local player default)
-        // Uses team-specific spawn points
-        let debug_mannequin = {
-            let team = Team::A;
-            let spawns = team.spawn_points();
-            if !spawns.is_empty() {
-                let spawn = spawns[0];
-                let mut mannequin = RemotePlayer::new(team);
-                mannequin.position = Vec3::new(spawn[0], spawn[1], spawn[2]);
-                mannequin.yaw = 0.0;
-                Some(mannequin)
-            } else {
-                None
-            }
-        };
-
         Self {
             window,
             surface,
@@ -375,7 +359,7 @@ impl GpuState {
             spawn_points,
             map_bounds,
             local_team: None,
-            remote_player: debug_mannequin,
+            remote_players: HashMap::new(),
             player_render,
         }
     }
@@ -432,7 +416,7 @@ impl GpuState {
         }
 
         if self.local_team.is_some() {
-            webrtc::send_player_state_to_peer(self.player.position, self.player.yaw);
+            webrtc::send_player_state_to_peers(self.player.position, self.player.yaw);
         }
 
         update_coordinates_display(self.player.position);
@@ -504,20 +488,25 @@ impl GpuState {
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
 
-            if let (Some(remote), Some(pr)) = (&self.remote_player, &self.player_render) {
-                let uniform = PlayerUniform {
-                    model: remote.model_matrix().to_cols_array_2d(),
-                    color: remote.team.color(),
-                };
-                self.queue
-                    .write_buffer(&pr.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
-
+            if let Some(pr) = &self.player_render {
                 pass.set_pipeline(&pr.pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_bind_group(1, &pr.bind_group, &[]);
                 pass.set_vertex_buffer(0, pr.vertex_buffer.slice(..));
                 pass.set_index_buffer(pr.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..pr.index_count, 0, 0..1);
+
+                for remote in self.remote_players.values() {
+                    let uniform = PlayerUniform {
+                        model: remote.model_matrix().to_cols_array_2d(),
+                        color: remote.team.color(),
+                    };
+                    self.queue.write_buffer(
+                        &pr.uniform_buffer,
+                        0,
+                        bytemuck::cast_slice(&[uniform]),
+                    );
+                    pass.set_bind_group(1, &pr.bind_group, &[]);
+                    pass.draw_indexed(0..pr.index_count, 0, 0..1);
+                }
             }
         }
 
@@ -691,26 +680,39 @@ fn update_coordinates_display(pos: Vec3) {
     }
 }
 
-fn update_remote_coordinates_display(pos: Option<Vec3>) {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        if let Some(container) = doc.get_element_by_id("remote-coords")
-            && let Some(html_elem) = container.dyn_ref::<web_sys::HtmlElement>()
-        {
-            if pos.is_some() {
-                let _ = html_elem.style().set_property("display", "block");
-            } else {
-                let _ = html_elem.style().set_property("display", "none");
-            }
+fn update_team_counts_display(
+    local_team: Option<Team>,
+    remote_players: &HashMap<u64, RemotePlayer>,
+) {
+    let mut team_a = 0;
+    let mut team_b = 0;
+
+    // Count local player
+    if let Some(team) = local_team {
+        match team {
+            Team::A => team_a += 1,
+            Team::B => team_b += 1,
         }
-        if let Some(pos) = pos
-            && let Some(e) = doc.get_element_by_id("remote-pos")
-        {
-            e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
+    }
+
+    // Count remote players
+    for remote in remote_players.values() {
+        match remote.team {
+            Team::A => team_a += 1,
+            Team::B => team_b += 1,
+        }
+    }
+
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(e) = doc.get_element_by_id("team-a-count") {
+            e.set_text_content(Some(&team_a.to_string()));
+        }
+        if let Some(e) = doc.get_element_by_id("team-b-count") {
+            e.set_text_content(Some(&team_b.to_string()));
         }
     }
 }
 
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -722,16 +724,14 @@ pub fn run() {
 
     webrtc::init_webrtc_client();
 
-    webrtc::set_player_state_callback(|position, yaw| {
+    webrtc::set_player_state_callback(|peer_id, position, yaw| {
         GPU_STATE.with(|s| {
             let mut guard = s.borrow_mut();
             let Some(state) = guard.as_mut() else { return };
-            let Some(remote) = state.remote_player.as_mut() else {
-                return;
-            };
-            remote.position = position;
-            remote.yaw = yaw;
-            update_remote_coordinates_display(Some(position));
+            if let Some(remote) = state.remote_players.get_mut(&peer_id) {
+                remote.position = position;
+                remote.yaw = yaw;
+            }
         });
     });
 
@@ -752,9 +752,29 @@ pub fn run() {
                     .respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
             }
 
-            // Remote player is on the opposite team
-            let remote_team = if team == Team::A { Team::B } else { Team::A };
-            state.remote_player = Some(RemotePlayer::new(remote_team));
+            update_team_counts_display(state.local_team, &state.remote_players);
+        });
+    });
+
+    webrtc::set_peer_joined_callback(|peer_id, team| {
+        log::info!("Peer {} joined on team {:?}", peer_id, team);
+        GPU_STATE.with(|s| {
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            state
+                .remote_players
+                .insert(peer_id, RemotePlayer::new(team));
+            update_team_counts_display(state.local_team, &state.remote_players);
+        });
+    });
+
+    webrtc::set_peer_left_callback(|peer_id| {
+        log::info!("Peer {} left", peer_id);
+        GPU_STATE.with(|s| {
+            let mut guard = s.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            state.remote_players.remove(&peer_id);
+            update_team_counts_display(state.local_team, &state.remote_players);
         });
     });
 

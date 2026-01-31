@@ -7,37 +7,120 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Team {
+    A,
+    B,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct SignalMessage {
-    #[serde(rename = "type")]
-    msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sdp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    candidate: Option<String>,
-    #[serde(rename = "sdpMid", skip_serializing_if = "Option::is_none")]
-    sdp_mid: Option<String>,
-    #[serde(rename = "sdpMLineIndex", skip_serializing_if = "Option::is_none")]
-    sdp_m_line_index: Option<u16>,
+#[serde(tag = "type")]
+enum ClientMessage {
+    #[serde(rename = "join")]
+    Join,
+    #[serde(rename = "offer")]
+    Offer {
+        #[serde(rename = "targetId")]
+        target_id: ClientId,
+        sdp: String,
+    },
+    #[serde(rename = "answer")]
+    Answer {
+        #[serde(rename = "targetId")]
+        target_id: ClientId,
+        sdp: String,
+    },
+    #[serde(rename = "ice-candidate")]
+    IceCandidate {
+        #[serde(rename = "targetId")]
+        target_id: ClientId,
+        candidate: String,
+        #[serde(rename = "sdpMid")]
+        sdp_mid: Option<String>,
+        #[serde(rename = "sdpMLineIndex")]
+        sdp_m_line_index: Option<u16>,
+    },
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(tag = "type")]
+enum ServerMessage {
+    #[serde(rename = "welcome")]
+    Welcome {
+        #[serde(rename = "clientId")]
+        client_id: ClientId,
+        team: Team,
+        peers: Vec<PeerInfo>,
+    },
+    #[serde(rename = "peer-joined")]
+    PeerJoined {
+        #[serde(rename = "peerId")]
+        peer_id: ClientId,
+        team: Team,
+    },
+    #[serde(rename = "peer-left")]
+    PeerLeft {
+        #[serde(rename = "peerId")]
+        peer_id: ClientId,
+    },
+    #[serde(rename = "offer")]
+    Offer {
+        #[serde(rename = "fromId")]
+        from_id: ClientId,
+        sdp: String,
+    },
+    #[serde(rename = "answer")]
+    Answer {
+        #[serde(rename = "fromId")]
+        from_id: ClientId,
+        sdp: String,
+    },
+    #[serde(rename = "ice-candidate")]
+    IceCandidate {
+        #[serde(rename = "fromId")]
+        from_id: ClientId,
+        candidate: String,
+        #[serde(rename = "sdpMid")]
+        sdp_mid: Option<String>,
+        #[serde(rename = "sdpMLineIndex")]
+        sdp_m_line_index: Option<u16>,
+    },
+}
+
+#[derive(Serialize, Debug, Clone)]
+struct PeerInfo {
+    id: ClientId,
+    team: Team,
 }
 
 type ClientId = u64;
 type ClientSender = mpsc::UnboundedSender<String>;
 
+struct ClientInfo {
+    team: Team,
+    sender: ClientSender,
+}
+
 struct SignalingState {
     next_id: ClientId,
-    waiting_client: Option<ClientId>,
-    peers: HashMap<ClientId, ClientId>,
-    senders: HashMap<ClientId, ClientSender>,
+    clients: HashMap<ClientId, ClientInfo>,
 }
 
 impl SignalingState {
     fn new() -> Self {
         Self {
             next_id: 0,
-            waiting_client: None,
-            peers: HashMap::new(),
-            senders: HashMap::new(),
+            clients: HashMap::new(),
+        }
+    }
+
+    fn assign_team(&self) -> Team {
+        let team_a_count = self.clients.values().filter(|c| c.team == Team::A).count();
+        let team_b_count = self.clients.values().filter(|c| c.team == Team::B).count();
+        if team_a_count <= team_b_count {
+            Team::A
+        } else {
+            Team::B
         }
     }
 }
@@ -67,7 +150,6 @@ async fn handle_socket(socket: WebSocket) {
     log::info!("Client {} connected", client_id);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    state.lock().await.senders.insert(client_id, tx);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -82,12 +164,15 @@ async fn handle_socket(socket: WebSocket) {
         }
     });
 
+    // Store sender temporarily (will be moved to clients map on join)
+    let sender = tx;
+
     // Receive messages from client
     while let Some(Ok(msg)) = ws_rx.next().await {
         if let Message::Text(text) = msg
-            && let Ok(signal) = serde_json::from_str::<SignalMessage>(&text)
+            && let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
         {
-            handle_message(client_id, signal, state).await;
+            handle_message(client_id, client_msg, state, sender.clone()).await;
         }
     }
 
@@ -97,56 +182,128 @@ async fn handle_socket(socket: WebSocket) {
     send_task.abort();
 }
 
-async fn handle_message(client_id: ClientId, msg: SignalMessage, state: &SharedState) {
-    log::info!("Client {} sent: {}", client_id, msg.msg_type);
-
-    match msg.msg_type.as_str() {
-        "join" => {
+async fn handle_message(
+    client_id: ClientId,
+    msg: ClientMessage,
+    state: &SharedState,
+    sender: ClientSender,
+) {
+    match msg {
+        ClientMessage::Join => {
             let mut s = state.lock().await;
 
-            if let Some(waiting_id) = s.waiting_client.take() {
-                s.peers.insert(client_id, waiting_id);
-                s.peers.insert(waiting_id, client_id);
+            // Assign team (balance teams)
+            let team = s.assign_team();
 
-                log::info!("Paired clients {} and {}", client_id, waiting_id);
+            // Get list of existing peers
+            let peers: Vec<PeerInfo> = s
+                .clients
+                .iter()
+                .map(|(&id, info)| PeerInfo {
+                    id,
+                    team: info.team,
+                })
+                .collect();
 
-                send_to_client_locked(&s, waiting_id, r#"{"type":"create-offer"}"#);
-                send_to_client_locked(&s, client_id, r#"{"type":"waiting-for-offer"}"#);
-            } else {
-                s.waiting_client = Some(client_id);
-                log::info!("Client {} waiting for peer", client_id);
-                send_to_client_locked(&s, client_id, r#"{"type":"waiting"}"#);
+            log::info!(
+                "Client {} joined as Team {:?}, {} existing peers",
+                client_id,
+                team,
+                peers.len()
+            );
+
+            // Broadcast peer-joined to all existing clients
+            let peer_joined = ServerMessage::PeerJoined {
+                peer_id: client_id,
+                team,
+            };
+            if let Ok(json) = serde_json::to_string(&peer_joined) {
+                for info in s.clients.values() {
+                    let _ = info.sender.send(json.clone());
+                }
+            }
+
+            // Add this client to the room
+            s.clients.insert(
+                client_id,
+                ClientInfo {
+                    team,
+                    sender: sender.clone(),
+                },
+            );
+
+            // Send welcome message to the new client
+            let welcome = ServerMessage::Welcome {
+                client_id,
+                team,
+                peers,
+            };
+            if let Ok(json) = serde_json::to_string(&welcome) {
+                let _ = sender.send(json);
             }
         }
-        "offer" | "answer" | "ice-candidate" => {
+        ClientMessage::Offer { target_id, sdp } => {
             let s = state.lock().await;
-            if let Some(&peer_id) = s.peers.get(&client_id)
-                && let Ok(json) = serde_json::to_string(&msg)
-            {
-                send_to_client_locked(&s, peer_id, &json);
+            if let Some(target) = s.clients.get(&target_id) {
+                let msg = ServerMessage::Offer {
+                    from_id: client_id,
+                    sdp,
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = target.sender.send(json);
+                }
             }
         }
-        _ => {}
-    }
-}
-
-fn send_to_client_locked(state: &SignalingState, client_id: ClientId, msg: &str) {
-    if let Some(tx) = state.senders.get(&client_id) {
-        let _ = tx.send(msg.to_string());
+        ClientMessage::Answer { target_id, sdp } => {
+            let s = state.lock().await;
+            if let Some(target) = s.clients.get(&target_id) {
+                let msg = ServerMessage::Answer {
+                    from_id: client_id,
+                    sdp,
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = target.sender.send(json);
+                }
+            }
+        }
+        ClientMessage::IceCandidate {
+            target_id,
+            candidate,
+            sdp_mid,
+            sdp_m_line_index,
+        } => {
+            let s = state.lock().await;
+            if let Some(target) = s.clients.get(&target_id) {
+                let msg = ServerMessage::IceCandidate {
+                    from_id: client_id,
+                    candidate,
+                    sdp_mid,
+                    sdp_m_line_index,
+                };
+                if let Ok(json) = serde_json::to_string(&msg) {
+                    let _ = target.sender.send(json);
+                }
+            }
+        }
     }
 }
 
 async fn cleanup_client(client_id: ClientId, state: &SharedState) {
     let mut s = state.lock().await;
 
-    s.senders.remove(&client_id);
+    s.clients.remove(&client_id);
 
-    if s.waiting_client == Some(client_id) {
-        s.waiting_client = None;
+    // Notify all remaining clients that this peer left
+    let peer_left = ServerMessage::PeerLeft { peer_id: client_id };
+    if let Ok(json) = serde_json::to_string(&peer_left) {
+        for info in s.clients.values() {
+            let _ = info.sender.send(json.clone());
+        }
     }
 
-    if let Some(peer_id) = s.peers.remove(&client_id) {
-        s.peers.remove(&peer_id);
-        send_to_client_locked(&s, peer_id, r#"{"type":"peer-disconnected"}"#);
-    }
+    log::info!(
+        "Client {} removed, {} clients remaining",
+        client_id,
+        s.clients.len()
+    );
 }

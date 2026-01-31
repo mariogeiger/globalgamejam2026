@@ -9,7 +9,7 @@ use crate::glb::{SPAWNS_TEAM_A, SPAWNS_TEAM_B};
 
 // === Team ===
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Team {
     A,
     B,
