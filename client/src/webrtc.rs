@@ -1,3 +1,4 @@
+use crate::config::{SIGNALING_SERVER, STUN_SERVERS};
 use crate::player::{PlayerStateMessage, Team};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
@@ -10,13 +11,6 @@ use web_sys::{
     RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
     RtcSessionDescriptionInit, WebSocket,
 };
-
-const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch/ws";
-const STUN_SERVERS: &[&str] = &[
-    "stun:ggj26.cheapmo.ch:3478",
-    "stun:stun.l.google.com:19302",
-    "stun:stun1.l.google.com:19302",
-];
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameMessage {

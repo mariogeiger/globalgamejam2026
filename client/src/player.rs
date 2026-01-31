@@ -165,11 +165,7 @@ impl RemotePlayer {
     pub fn new(team: Team) -> Self {
         let spawn = team.spawn_points()[0];
         Self {
-            position: Vec3::new(
-                -spawn[0] * SPAWN_SCALE,
-                spawn[2] * SPAWN_SCALE,
-                spawn[1] * SPAWN_SCALE,
-            ),
+            position: Vec3::new(spawn[0], spawn[1], spawn[2]),
             yaw: 0.0,
             team,
         }

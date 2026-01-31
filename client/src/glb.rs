@@ -2,33 +2,18 @@ use glam::Vec3;
 use gltf::image::Format;
 use std::collections::HashMap;
 
-use crate::config::SPAWN_SCALE;
 use crate::map::{LoadedMap, MapMesh, MapVertex, TextureData};
 
 pub const SPAWNS_TEAM_A: &[[f32; 3]] = &[
-    [-8.0, -10.0, 4.0],
-    [-10.0, -10.0, 4.0],
-    [-14.0, -10.0, 4.0],
-    [-16.0, -10.0, 4.0],
-    [-18.0, -10.0, 4.0],
-    [-8.0, -12.0, 4.0],
-    [-10.0, -12.0, 4.0],
-    [-14.0, -12.0, 4.0],
-    [-16.0, -12.0, 4.0],
-    [-18.0, -12.0, 4.0],
+    [-408.5, -127.0, 2414.2],
+    [-196.2, -127.0, 2417.7],
+    [-277.4, -127.0, 2204.3],
 ];
 
 pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
-    [5.5, 32.0, 0.0],
-    [3.5, 32.0, 0.0],
-    [5.5, 30.0, 0.0],
-    [3.5, 30.0, 0.0],
-    [0.5, 29.0, 0.0],
-    [-1.5, 29.0, 0.0],
-    [7.5, 29.0, 0.0],
-    [9.5, 29.0, 1.0],
-    [11.5, 29.0, 2.0],
-    [13.5, 29.0, 2.0],
+    [693.9, 128.0, -809.9],
+    [1029.4, 128.0, -751.7],
+    [832.7, 138.8, -939.1],
 ];
 
 pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
@@ -132,7 +117,7 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
     let spawn_points: Vec<Vec3> = SPAWNS_TEAM_A
         .iter()
         .chain(SPAWNS_TEAM_B.iter())
-        .map(|s| Vec3::new(-s[0] * SPAWN_SCALE, s[2] * SPAWN_SCALE, s[1] * SPAWN_SCALE))
+        .map(|s| Vec3::new(s[0], s[1], s[2]))
         .collect();
 
     log::info!(

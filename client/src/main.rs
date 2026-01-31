@@ -657,12 +657,10 @@ thread_local! {
 }
 
 fn update_coordinates_display(pos: Vec3) {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        for (id, val) in [("coord-x", pos.x), ("coord-y", pos.y), ("coord-z", pos.z)] {
-            if let Some(e) = doc.get_element_by_id(id) {
-                e.set_text_content(Some(&format!("{:.2}", val)));
-            }
-        }
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(e) = doc.get_element_by_id("local-pos")
+    {
+        e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
     }
 }
 
@@ -677,16 +675,10 @@ fn update_remote_coordinates_display(pos: Option<Vec3>) {
                 let _ = html_elem.style().set_property("display", "none");
             }
         }
-        if let Some(pos) = pos {
-            for (id, val) in [
-                ("remote-x", pos.x),
-                ("remote-y", pos.y),
-                ("remote-z", pos.z),
-            ] {
-                if let Some(e) = doc.get_element_by_id(id) {
-                    e.set_text_content(Some(&format!("{:.2}", val)));
-                }
-            }
+        if let Some(pos) = pos
+            && let Some(e) = doc.get_element_by_id("remote-pos")
+        {
+            e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
         }
     }
 }
