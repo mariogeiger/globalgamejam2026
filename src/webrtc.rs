@@ -8,14 +8,24 @@ use web_sys::{
     RtcSessionDescriptionInit, RtcSdpType, WebSocket, RtcConfiguration,
 };
 use serde::{Deserialize, Serialize};
+use glam::Vec3;
+use crate::network_player::{Team, RemotePlayer, PlayerStateMessage};
 
 const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RotationMessage {
+pub struct GameMessage {
     pub msg_type: String,
-    pub dx: f32,
-    pub dy: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -38,7 +48,9 @@ pub struct WebRtcClient {
     #[allow(dead_code)]
     pc: Rc<RefCell<Option<RtcPeerConnection>>>,
     data_channel: Rc<RefCell<Option<RtcDataChannel>>>,
-    on_rotation: Rc<RefCell<Option<Box<dyn Fn(f32, f32)>>>>,
+    on_player_state: Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
+    on_team_assign: Rc<RefCell<Option<Box<dyn Fn(Team)>>>>,
+    local_team: Rc<RefCell<Option<Team>>>,
     #[allow(dead_code)]
     connected: Rc<RefCell<bool>>,
     #[allow(dead_code)]
@@ -52,7 +64,9 @@ impl WebRtcClient {
         
         let pc: Rc<RefCell<Option<RtcPeerConnection>>> = Rc::new(RefCell::new(None));
         let data_channel: Rc<RefCell<Option<RtcDataChannel>>> = Rc::new(RefCell::new(None));
-        let on_rotation: Rc<RefCell<Option<Box<dyn Fn(f32, f32)>>>> = Rc::new(RefCell::new(None));
+        let on_player_state: Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>> = Rc::new(RefCell::new(None));
+        let on_team_assign: Rc<RefCell<Option<Box<dyn Fn(Team)>>>> = Rc::new(RefCell::new(None));
+        let local_team: Rc<RefCell<Option<Team>>> = Rc::new(RefCell::new(None));
         let connected = Rc::new(RefCell::new(false));
         let pending_candidates: Rc<RefCell<Vec<SignalMessage>>> = Rc::new(RefCell::new(Vec::new()));
         
@@ -73,7 +87,9 @@ impl WebRtcClient {
         let ws_for_msg = ws.clone();
         let pc_for_msg = pc.clone();
         let dc_for_msg = data_channel.clone();
-        let on_rotation_for_msg = on_rotation.clone();
+        let on_player_state_for_msg = on_player_state.clone();
+        let on_team_assign_for_msg = on_team_assign.clone();
+        let local_team_for_msg = local_team.clone();
         let connected_for_msg = connected.clone();
         let pending_for_msg = pending_candidates.clone();
         
@@ -84,7 +100,9 @@ impl WebRtcClient {
                         &ws_for_msg,
                         &pc_for_msg,
                         &dc_for_msg,
-                        &on_rotation_for_msg,
+                        &on_player_state_for_msg,
+                        &on_team_assign_for_msg,
+                        &local_team_for_msg,
                         &connected_for_msg,
                         &pending_for_msg,
                         msg,
@@ -115,20 +133,18 @@ impl WebRtcClient {
             ws,
             pc,
             data_channel,
-            on_rotation,
+            on_player_state,
+            on_team_assign,
+            local_team,
             connected,
             pending_candidates,
         })
     }
     
-    pub fn send_rotation(&self, dx: f32, dy: f32) {
+    pub fn send_player_state(&self, position: Vec3, yaw: f32) {
         if let Some(ref dc) = *self.data_channel.borrow() {
             if dc.ready_state() == web_sys::RtcDataChannelState::Open {
-                let msg = RotationMessage {
-                    msg_type: "rotate".to_string(),
-                    dx,
-                    dy,
-                };
+                let msg = PlayerStateMessage::new(position, yaw);
                 if let Ok(json) = serde_json::to_string(&msg) {
                     let _ = dc.send_with_str(&json);
                 }
@@ -136,8 +152,16 @@ impl WebRtcClient {
         }
     }
     
-    pub fn set_on_rotation<F: Fn(f32, f32) + 'static>(&self, callback: F) {
-        *self.on_rotation.borrow_mut() = Some(Box::new(callback));
+    pub fn set_on_player_state<F: Fn(Vec3, f32) + 'static>(&self, callback: F) {
+        *self.on_player_state.borrow_mut() = Some(Box::new(callback));
+    }
+    
+    pub fn set_on_team_assign<F: Fn(Team) + 'static>(&self, callback: F) {
+        *self.on_team_assign.borrow_mut() = Some(Box::new(callback));
+    }
+    
+    pub fn get_local_team(&self) -> Option<Team> {
+        *self.local_team.borrow()
     }
 }
 
@@ -145,7 +169,9 @@ fn handle_signal_message(
     ws: &WebSocket,
     pc_cell: &Rc<RefCell<Option<RtcPeerConnection>>>,
     dc_cell: &Rc<RefCell<Option<RtcDataChannel>>>,
-    on_rotation: &Rc<RefCell<Option<Box<dyn Fn(f32, f32)>>>>,
+    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
+    on_team_assign: &Rc<RefCell<Option<Box<dyn Fn(Team)>>>>,
+    local_team: &Rc<RefCell<Option<Team>>>,
     connected: &Rc<RefCell<bool>>,
     pending_candidates: &Rc<RefCell<Vec<SignalMessage>>>,
     msg: SignalMessage,
@@ -153,7 +179,9 @@ fn handle_signal_message(
     let ws = ws.clone();
     let pc_cell = pc_cell.clone();
     let dc_cell = dc_cell.clone();
-    let on_rotation = on_rotation.clone();
+    let on_player_state = on_player_state.clone();
+    let on_team_assign = on_team_assign.clone();
+    let local_team = local_team.clone();
     let connected = connected.clone();
     let pending_candidates = pending_candidates.clone();
     
@@ -163,20 +191,30 @@ fn handle_signal_message(
                 update_status("Waiting for another player...");
             }
             "waiting-for-offer" => {
-                update_status("Peer found! Waiting for connection...");
+                // Second player joins - they are Team B
+                *local_team.borrow_mut() = Some(Team::B);
+                if let Some(ref callback) = *on_team_assign.borrow() {
+                    callback(Team::B);
+                }
+                update_status("You are Team B (Red). Waiting for connection...");
             }
             "create-offer" => {
                 log::info!("Creating offer...");
-                update_status("Peer found! Creating connection...");
+                // First player (offerer) is Team A
+                *local_team.borrow_mut() = Some(Team::A);
+                if let Some(ref callback) = *on_team_assign.borrow() {
+                    callback(Team::A);
+                }
+                update_status("You are Team A (Blue). Creating connection...");
                 
                 // Create peer connection with STUN
-                if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_rotation, &connected) {
+                if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_player_state, &connected) {
                     // Store it immediately so ICE candidates can be added
                     *pc_cell.borrow_mut() = Some(pc.clone());
                     
                     // Create data channel
-                    let dc = pc.create_data_channel("cube-sync");
-                    setup_data_channel(&dc, &on_rotation, &connected);
+                    let dc = pc.create_data_channel("game-sync");
+                    setup_data_channel(&dc, &on_player_state, &connected);
                     *dc_cell.borrow_mut() = Some(dc);
                     
                     // Create offer
@@ -209,7 +247,7 @@ fn handle_signal_message(
                 
                 if let Some(sdp) = msg.sdp {
                     // Create peer connection with STUN
-                    if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_rotation, &connected) {
+                    if let Ok(pc) = create_peer_connection(&ws, &dc_cell, &on_player_state, &connected) {
                         // Store it immediately
                         *pc_cell.borrow_mut() = Some(pc.clone());
                         
@@ -326,7 +364,7 @@ async fn add_ice_candidate(pc: &RtcPeerConnection, candidate: &str, sdp_mid: &Op
 fn create_peer_connection(
     ws: &WebSocket,
     dc_cell: &Rc<RefCell<Option<RtcDataChannel>>>,
-    on_rotation: &Rc<RefCell<Option<Box<dyn Fn(f32, f32)>>>>,
+    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
     connected: &Rc<RefCell<bool>>,
 ) -> Result<RtcPeerConnection, JsValue> {
     // Configure with STUN servers for NAT traversal
@@ -384,14 +422,14 @@ fn create_peer_connection(
     
     // Data channel handler (for answerer)
     let dc_cell_clone = dc_cell.clone();
-    let on_rotation_clone = on_rotation.clone();
+    let on_player_state_clone = on_player_state.clone();
     let connected_clone = connected.clone();
     let ondatachannel = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcDataChannelEvent = ev.unchecked_into();
         let dc = ev.channel();
         log::info!("Received data channel: {}", dc.label());
         
-        setup_data_channel(&dc, &on_rotation_clone, &connected_clone);
+        setup_data_channel(&dc, &on_player_state_clone, &connected_clone);
         *dc_cell_clone.borrow_mut() = Some(dc);
     }) as Box<dyn FnMut(JsValue)>);
     pc.set_ondatachannel(Some(ondatachannel.as_ref().unchecked_ref()));
@@ -402,14 +440,14 @@ fn create_peer_connection(
 
 fn setup_data_channel(
     dc: &RtcDataChannel,
-    on_rotation: &Rc<RefCell<Option<Box<dyn Fn(f32, f32)>>>>,
+    on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
     connected: &Rc<RefCell<bool>>,
 ) {
     let connected_clone = connected.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
         log::info!("Data channel opened!");
         *connected_clone.borrow_mut() = true;
-        update_status("Connected! Drag the cube to sync.");
+        update_status("Connected! Both players ready.");
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -420,14 +458,16 @@ fn setup_data_channel(
     dc.set_onclose(Some(onclose.as_ref().unchecked_ref()));
     onclose.forget();
     
-    let on_rotation_clone = on_rotation.clone();
+    let on_player_state_clone = on_player_state.clone();
     let onmessage = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: MessageEvent = ev.unchecked_into();
         if let Some(data) = ev.data().as_string() {
-            if let Ok(msg) = serde_json::from_str::<RotationMessage>(&data) {
-                if msg.msg_type == "rotate" {
-                    if let Some(ref callback) = *on_rotation_clone.borrow() {
-                        callback(msg.dx, msg.dy);
+            if let Ok(msg) = serde_json::from_str::<GameMessage>(&data) {
+                if msg.msg_type == "player_state" {
+                    if let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw) {
+                        if let Some(ref callback) = *on_player_state_clone.borrow() {
+                            callback(Vec3::new(x, y, z), yaw);
+                        }
                     }
                 }
             }
@@ -465,18 +505,36 @@ pub fn init_webrtc_client() {
     }
 }
 
-pub fn send_rotation_to_peer(dx: f32, dy: f32) {
+pub fn send_player_state_to_peer(position: Vec3, yaw: f32) {
     WEBRTC_CLIENT.with(|c| {
         if let Some(ref client) = *c.borrow() {
-            client.send_rotation(dx, dy);
+            client.send_player_state(position, yaw);
         }
     });
 }
 
-pub fn set_rotation_callback<F: Fn(f32, f32) + 'static>(callback: F) {
+pub fn set_player_state_callback<F: Fn(Vec3, f32) + 'static>(callback: F) {
     WEBRTC_CLIENT.with(|c| {
         if let Some(ref client) = *c.borrow() {
-            client.set_on_rotation(callback);
+            client.set_on_player_state(callback);
         }
     });
+}
+
+pub fn set_team_assign_callback<F: Fn(Team) + 'static>(callback: F) {
+    WEBRTC_CLIENT.with(|c| {
+        if let Some(ref client) = *c.borrow() {
+            client.set_on_team_assign(callback);
+        }
+    });
+}
+
+pub fn get_local_team() -> Option<Team> {
+    WEBRTC_CLIENT.with(|c| {
+        if let Some(ref client) = c.borrow().as_ref() {
+            client.get_local_team()
+        } else {
+            None
+        }
+    })
 }

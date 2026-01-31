@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dust2 Map Viewer</title>
+    <title>Two Player Game - Dust2</title>
     <style>
         * {
             margin: 0;
@@ -20,6 +20,19 @@
         #wasm-container {
             width: 100%;
             height: 100%;
+        }
+        #connection-status {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 30, 46, 0.95);
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: #f9e2af;
+            font-size: 14px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
         .controls {
             position: fixed;
@@ -49,17 +62,25 @@
             font-family: monospace;
             font-size: 12px;
         }
+        .team-a { color: #89b4fa; }
+        .team-b { color: #f38ba8; }
     </style>
 </head>
 <body>
     <div id="wasm-container"></div>
     
+    <div id="connection-status">Connecting to server...</div>
+    
     <div class="controls">
-        <h4>Controls</h4>
+        <h4>Two Player Game</h4>
         <p><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> - Move</p>
         <p><kbd>Mouse</kbd> - Look around</p>
         <p><kbd>Space</kbd> - Jump</p>
         <p><kbd>Click</kbd> - Enable mouse look</p>
+        <p style="margin-top: 8px;">
+            <span class="team-a">■</span> Team A (Blue) vs 
+            <span class="team-b">■</span> Team B (Red)
+        </p>
     </div>
     
     <link data-trunk rel="rust" data-wasm-opt="z" />

@@ -18,6 +18,7 @@ mod map;
 mod glb;
 mod player;
 mod collision;
+mod network_player;
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -29,6 +30,7 @@ use map::{MapVertex, LoadedMap};
 #[cfg(not(target_arch = "wasm32"))]
 use glb::load_glb;
 use glb::load_glb_from_bytes;
+use network_player::{PlayerVertex, PlayerUniform, RemotePlayer, Team, generate_player_box};
 
 // Embed the GLB file for WASM builds
 #[cfg(target_arch = "wasm32")]
@@ -49,6 +51,15 @@ struct MapRenderData {
     bind_group: wgpu::BindGroup,
 }
 
+struct PlayerRenderData {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    pipeline: wgpu::RenderPipeline,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 struct GpuState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -60,6 +71,7 @@ struct GpuState {
     render_pipeline: wgpu::RenderPipeline,
     camera_uniform_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    camera_bind_group_layout: wgpu::BindGroupLayout,
     #[allow(dead_code)]
     texture_bind_group_layout: wgpu::BindGroupLayout,
     map_meshes: Vec<MapRenderData>,
@@ -69,6 +81,10 @@ struct GpuState {
     cursor_grabbed: bool,
     #[allow(dead_code)]
     last_cursor_pos: Option<(f64, f64)>,
+    // Multiplayer
+    local_team: Option<Team>,
+    remote_player: Option<RemotePlayer>,
+    player_render: Option<PlayerRenderData>,
 }
 
 impl GpuState {
@@ -418,6 +434,122 @@ impl GpuState {
             (Vec::new(), Player::new(Vec3::new(0.0, 100.0, 0.0)), None)
         };
 
+        // Create player rendering resources
+        let player_render = {
+            // Player shader
+            let player_shader_source = include_str!("player.wgsl");
+            let player_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Player Shader"),
+                source: wgpu::ShaderSource::Wgsl(player_shader_source.into()),
+            });
+
+            // Player uniform bind group layout
+            let player_uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Player Uniform Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+            // Player pipeline layout
+            let player_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Player Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout, &player_uniform_layout],
+                immediate_size: 0,
+            });
+
+            // Player render pipeline
+            let player_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Player Render Pipeline"),
+                layout: Some(&player_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &player_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[PlayerVertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &player_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
+            // Generate player box mesh
+            let (vertices, indices) = generate_player_box();
+
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Player Vertex Buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Player Index Buffer"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            // Player uniform buffer
+            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Player Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[PlayerUniform {
+                    model: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                    color: [1.0, 0.0, 0.0, 1.0],
+                }]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Player Bind Group"),
+                layout: &player_uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
+
+            Some(PlayerRenderData {
+                vertex_buffer,
+                index_buffer,
+                index_count: indices.len() as u32,
+                pipeline: player_pipeline,
+                uniform_buffer,
+                bind_group,
+            })
+        };
+
         Self {
             window,
             surface,
@@ -429,6 +561,7 @@ impl GpuState {
             render_pipeline,
             camera_uniform_buffer,
             camera_bind_group,
+            camera_bind_group_layout,
             texture_bind_group_layout,
             map_meshes,
             player,
@@ -436,6 +569,9 @@ impl GpuState {
             last_frame_time: Instant::now(),
             cursor_grabbed: false,
             last_cursor_pos: None,
+            local_team: None,
+            remote_player: None,
+            player_render,
         }
     }
 
@@ -473,6 +609,12 @@ impl GpuState {
             if hit_ceiling {
                 self.player.velocity.y = 0.0; // Stop upward movement on ceiling hit
             }
+        }
+
+        // Send player state to remote peer (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        if self.local_team.is_some() {
+            webrtc::send_player_state_to_peer(self.player.position, self.player.yaw);
         }
     }
 
@@ -536,6 +678,27 @@ impl GpuState {
                 render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+
+            // Render remote player if connected
+            if let (Some(remote), Some(player_render)) = (&self.remote_player, &self.player_render) {
+                // Update player uniform with remote player's transform and team color
+                let uniform = PlayerUniform {
+                    model: remote.model_matrix().to_cols_array_2d(),
+                    color: remote.team.color(),
+                };
+                self.queue.write_buffer(
+                    &player_render.uniform_buffer,
+                    0,
+                    bytemuck::cast_slice(&[uniform]),
+                );
+
+                render_pass.set_pipeline(&player_render.pipeline);
+                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_bind_group(1, &player_render.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, player_render.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(player_render.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..player_render.index_count, 0, 0..1);
             }
         }
 
@@ -870,6 +1033,37 @@ pub fn run() {
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
         console_log::init_with_level(log::Level::Info).expect("Couldn't initialize logger");
+        
+        // Initialize WebRTC for multiplayer
+        webrtc::init_webrtc_client();
+        
+        // Set up callback for receiving remote player state
+        webrtc::set_player_state_callback(|position, yaw| {
+            GPU_STATE.with(|s| {
+                if let Some(state) = s.borrow_mut().as_mut() {
+                    if let Some(ref mut remote) = state.remote_player {
+                        remote.position = position;
+                        remote.yaw = yaw;
+                    }
+                }
+            });
+        });
+        
+        // Set up callback for team assignment
+        webrtc::set_team_assign_callback(|team| {
+            log::info!("Assigned to team: {:?}", team);
+            GPU_STATE.with(|s| {
+                if let Some(state) = s.borrow_mut().as_mut() {
+                    state.local_team = Some(team);
+                    // Create remote player with opposite team
+                    let remote_team = match team {
+                        Team::A => Team::B,
+                        Team::B => Team::A,
+                    };
+                    state.remote_player = Some(RemotePlayer::new(remote_team));
+                }
+            });
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
