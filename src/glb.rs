@@ -152,36 +152,39 @@ fn load_glb_data(
         }
     }
     
-    // Calculate map bounds for debugging
-    let mut min_bounds = Vec3::splat(f32::MAX);
-    let mut max_bounds = Vec3::splat(f32::MIN);
+    // Calculate map bounds
+    let mut bounds_min = Vec3::splat(f32::MAX);
+    let mut bounds_max = Vec3::splat(f32::MIN);
     for v in &collision_vertices {
-        min_bounds = min_bounds.min(*v);
-        max_bounds = max_bounds.max(*v);
+        bounds_min = bounds_min.min(*v);
+        bounds_max = bounds_max.max(*v);
     }
-    log::info!("Map bounds: min={:?}, max={:?}", min_bounds, max_bounds);
+    log::info!("Map bounds: min={:?}, max={:?}", bounds_min, bounds_max);
     
-    // Use first spawn from team A
+    // Build spawn points from both teams
     // spawn.json: [x, forward, height] at 1/64 scale of GLB units
     // We flip X and Y in the loader
     const SPAWN_SCALE: f32 = 64.0;
-    let spawn = SPAWNS_TEAM_A[0];
-    let spawn_point = Vec3::new(
-        -spawn[0] * SPAWN_SCALE,  // Flip X to match mirrored map
-        spawn[2] * SPAWN_SCALE,
-        spawn[1] * SPAWN_SCALE,
-    );
+    let spawn_points: Vec<Vec3> = SPAWNS_TEAM_A.iter()
+        .chain(SPAWNS_TEAM_B.iter())
+        .map(|spawn| Vec3::new(
+            -spawn[0] * SPAWN_SCALE,  // Flip X to match mirrored map
+            spawn[2] * SPAWN_SCALE,
+            spawn[1] * SPAWN_SCALE,
+        ))
+        .collect();
     
-    log::info!("Loaded GLB: {} meshes, {} textures, {} collision triangles",
-        meshes.len(), textures.len(), collision_indices.len());
-    log::info!("Spawn point: {:?}", spawn_point);
+    log::info!("Loaded GLB: {} meshes, {} textures, {} collision triangles, {} spawn points",
+        meshes.len(), textures.len(), collision_indices.len(), spawn_points.len());
     
     Ok(LoadedMap {
         meshes,
         textures,
-        spawn_point,
+        spawn_points,
         collision_vertices,
         collision_indices,
+        bounds_min,
+        bounds_max,
     })
 }
 

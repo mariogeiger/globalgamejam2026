@@ -5,6 +5,7 @@ use instant::Instant;
 use std::path::Path;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
+use rand::prelude::*;
 use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
@@ -81,6 +82,9 @@ struct GpuState {
     cursor_grabbed: bool,
     #[allow(dead_code)]
     last_cursor_pos: Option<(f64, f64)>,
+    // Spawn points and map bounds for respawning
+    spawn_points: Vec<Vec3>,
+    map_bounds: Option<(Vec3, Vec3)>,
     // Multiplayer
     local_team: Option<Team>,
     remote_player: Option<RemotePlayer>,
@@ -274,7 +278,7 @@ impl GpuState {
         });
 
         // Process map data if available
-        let (map_meshes, player, physics) = if let Some(loaded_map) = loaded_map {
+        let (map_meshes, player, physics, spawn_points, map_bounds) = if let Some(loaded_map) = loaded_map {
             let mut gpu_textures: HashMap<String, (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)> = HashMap::new();
             
             // Create GPU textures
@@ -420,18 +424,26 @@ impl GpuState {
                 });
             }
 
-            let player = Player::new(loaded_map.spawn_point);
+            let spawn_points = loaded_map.spawn_points;
+            let map_bounds = Some((loaded_map.bounds_min, loaded_map.bounds_max));
+            
+            // Pick a random spawn point
+            let spawn_idx = rand::thread_rng().gen_range(0..spawn_points.len());
+            let initial_spawn = spawn_points[spawn_idx];
+            
+            let player = Player::new(initial_spawn);
             
             let physics = PhysicsWorld::new(
                 &loaded_map.collision_vertices,
                 &loaded_map.collision_indices,
-                loaded_map.spawn_point,
+                initial_spawn,
             );
 
-            (map_meshes, player, Some(physics))
+            (map_meshes, player, Some(physics), spawn_points, map_bounds)
         } else {
             // No map loaded - create empty state
-            (Vec::new(), Player::new(Vec3::new(0.0, 100.0, 0.0)), None)
+            let spawn_points = vec![Vec3::new(0.0, 100.0, 0.0)];
+            (Vec::new(), Player::new(spawn_points[0]), None, spawn_points, None)
         };
 
         // Create player rendering resources
@@ -569,6 +581,8 @@ impl GpuState {
             last_frame_time: Instant::now(),
             cursor_grabbed: false,
             last_cursor_pos: None,
+            spawn_points,
+            map_bounds,
             local_team: None,
             remote_player: None,
             player_render,
@@ -608,6 +622,24 @@ impl GpuState {
             self.player.set_on_ground(on_ground, None);
             if hit_ceiling {
                 self.player.velocity.y = 0.0; // Stop upward movement on ceiling hit
+            }
+        }
+
+        // Check if player is outside map bounds and respawn
+        if let Some((bounds_min, bounds_max)) = self.map_bounds {
+            const RESPAWN_MARGIN: f32 = 500.0; // Distance outside bounds before respawn
+            let pos = self.player.position;
+            let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
+                || pos.x > bounds_max.x + RESPAWN_MARGIN
+                || pos.y < bounds_min.y - RESPAWN_MARGIN
+                || pos.y > bounds_max.y + RESPAWN_MARGIN
+                || pos.z < bounds_min.z - RESPAWN_MARGIN
+                || pos.z > bounds_max.z + RESPAWN_MARGIN;
+            
+            if outside && !self.spawn_points.is_empty() {
+                log::info!("Player fell out of map, respawning");
+                let spawn_idx = rand::thread_rng().gen_range(0..self.spawn_points.len());
+                self.player.respawn(self.spawn_points[spawn_idx]);
             }
         }
 

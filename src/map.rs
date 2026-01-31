@@ -41,7 +41,9 @@ pub struct MapMesh {
 pub struct LoadedMap {
     pub meshes: Vec<MapMesh>,
     pub textures: HashMap<String, TextureData>,
-    pub spawn_point: Vec3,
+    pub spawn_points: Vec<Vec3>,
     pub collision_vertices: Vec<Vec3>,
     pub collision_indices: Vec<[u32; 3]>,
+    pub bounds_min: Vec3,
+    pub bounds_max: Vec3,
 }

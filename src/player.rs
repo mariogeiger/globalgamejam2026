@@ -167,4 +167,11 @@ impl Player {
         let max = self.position + Vec3::new(PLAYER_WIDTH / 2.0, PLAYER_HEIGHT, PLAYER_WIDTH / 2.0);
         (min, max)
     }
+    
+    /// Respawn the player at a given position
+    pub fn respawn(&mut self, spawn_position: Vec3) {
+        self.position = spawn_position;
+        self.velocity = Vec3::ZERO;
+        self.on_ground = false;
+    }
 }
