@@ -32,7 +32,7 @@ stunServer.on('message', (msg, rinfo) => {
     if (msgType !== STUN_BINDING_REQUEST || magicCookie !== STUN_MAGIC_COOKIE) return;
     
     // Extract transaction ID (12 bytes at offset 8)
-    const transactionId = msg.slice(8, 20);
+    const transactionId = msg.subarray(8, 20);
     
     // Build STUN Binding Response with XOR-MAPPED-ADDRESS
     const response = Buffer.alloc(32);
