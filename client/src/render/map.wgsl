@@ -37,18 +37,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coord);
     
-    // Simple directional lighting
     let light_dir = normalize(vec3<f32>(0.3, 1.0, 0.5));
     let normal = normalize(in.normal);
     let diffuse = max(dot(normal, light_dir), 0.0);
     
-    // Ambient + diffuse lighting
     let ambient = 0.3;
     let lighting = ambient + diffuse * 0.7;
     
     let final_color = tex_color.rgb * lighting;
     
-    // Discard fully transparent pixels
     if tex_color.a < 0.1 {
         discard;
     }

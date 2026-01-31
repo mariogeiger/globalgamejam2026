@@ -10,13 +10,7 @@ pub const SPAWNS_TEAM_A: &[[f32; 3]] = &[
     [-277.4, -127.0, 2204.3],
 ];
 
-pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
-    [-483.5, -127.4, 2188.0],
-    [24.6, -127.4, 2129.9],
-    // [693.9, 128.0, -809.9],
-    // [1029.4, 128.0, -751.7],
-    // [832.7, 138.8, -939.1],
-];
+pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[[-483.5, -127.4, 2188.0], [24.6, -127.4, 2129.9]];
 
 pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
     let (document, buffers, images) =
@@ -27,7 +21,6 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
     let mut collision_vertices: Vec<Vec3> = Vec::new();
     let mut collision_indices: Vec<[u32; 3]> = Vec::new();
 
-    // Load textures
     for (idx, image) in images.iter().enumerate() {
         textures.insert(
             format!("texture_{}", idx),
@@ -39,7 +32,6 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
         );
     }
 
-    // Process meshes
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -66,7 +58,6 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
                 .map(|i| i.into_u32().collect())
                 .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
-            // Build vertices with coordinate flip
             let vertices: Vec<MapVertex> = positions
                 .iter()
                 .zip(&tex_coords)
@@ -97,7 +88,6 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
                 texture_name,
             });
 
-            // Collision geometry
             let base_idx = collision_vertices.len() as u32;
             collision_vertices.extend(positions.iter().map(|p| Vec3::new(-p[0], -p[1], p[2])));
             collision_indices.extend(
@@ -109,13 +99,11 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
         }
     }
 
-    // Calculate bounds
     let (bounds_min, bounds_max) = collision_vertices.iter().fold(
         (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
         |(min, max), v| (min.min(*v), max.max(*v)),
     );
 
-    // Build spawn points
     let spawn_points: Vec<Vec3> = SPAWNS_TEAM_A
         .iter()
         .chain(SPAWNS_TEAM_B.iter())
@@ -156,7 +144,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             .flat_map(|c| [c[0], c[0], c[0], c[1]])
             .collect(),
         _ => {
-            // Fallback: magenta placeholder for unsupported formats
             log::warn!(
                 "Unsupported image format {:?}, using placeholder",
                 image.format

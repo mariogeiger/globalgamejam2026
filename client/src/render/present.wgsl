@@ -1,5 +1,3 @@
-// Blit history texture to swapchain (passthrough fullscreen quad).
-
 @group(0) @binding(0)
 var t_history: texture_2d<f32>;
 @group(0) @binding(1)

@@ -29,13 +29,10 @@ impl PhysicsWorld {
             Vector::new(origin.x, origin.y, origin.z),
             Vector::new(dir.x, dir.y, dir.z),
         );
-        // Pose3::IDENTITY is the identity transformation
         self.trimesh
             .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
     }
 
-    /// Check if there's a clear line of sight between two points.
-    /// Returns true if visible (no obstruction), false if blocked.
     pub fn is_visible(&self, from: Vec3, to: Vec3) -> bool {
         let dir = to - from;
         let distance = dir.length();
@@ -44,14 +41,11 @@ impl PhysicsWorld {
         }
         let dir_normalized = dir / distance;
         match self.cast_ray(from, dir_normalized, distance) {
-            Some(hit_dist) => hit_dist >= distance - 1.0, // small tolerance
+            Some(hit_dist) => hit_dist >= distance - 1.0,
             None => true,
         }
     }
 
-    /// Raycast from previous position toward next; if geometry is hit along the segment,
-    /// return a position clamped to just before the hit (anti-tunnelling).
-    /// Uses two rays (step height and head height) and clamps to the earliest hit.
     pub fn clamp_desired_to_path(&self, prev_pos: Vec3, next_pos: Vec3) -> Vec3 {
         let delta = next_pos - prev_pos;
         let len = delta.length();
@@ -61,16 +55,16 @@ impl PhysicsWorld {
         let dir = delta / len;
         let max_dist = len;
 
-        // Ignore hits very close to origin (already inside or on surface)
         const MIN_TOI: f32 = 0.5;
 
         let mut min_hit = max_dist + 1.0;
         for height in [STEP_OVER_HEIGHT, PLAYER_HEIGHT] {
             let origin = prev_pos + Vec3::new(0.0, height, 0.0);
-            if let Some(toi) = self.cast_ray(origin, dir, max_dist) {
-                if toi > MIN_TOI && toi < min_hit {
-                    min_hit = toi;
-                }
+            if let Some(toi) = self.cast_ray(origin, dir, max_dist)
+                && toi > MIN_TOI
+                && toi < min_hit
+            {
+                min_hit = toi;
             }
         }
 
@@ -87,7 +81,6 @@ impl PhysicsWorld {
         let mut on_ground = false;
         let half_width = PLAYER_WIDTH / 2.0;
 
-        // Ground check
         let ground_origin = desired_position + Vec3::new(0.0, STEP_OVER_HEIGHT, 0.0);
         if let Some(toi) = self.cast_ray(ground_origin, Vec3::NEG_Y, PLAYER_HEIGHT)
             && toi < STEP_OVER_HEIGHT + GROUND_SNAP_MARGIN
@@ -99,7 +92,6 @@ impl PhysicsWorld {
             }
         }
 
-        // Wall checks (4 directions, 2 heights: step-over and head)
         for height in [STEP_OVER_HEIGHT, PLAYER_HEIGHT] {
             let wall_origin = final_pos + Vec3::new(0.0, height, 0.0);
             for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
@@ -113,7 +105,6 @@ impl PhysicsWorld {
             }
         }
 
-        // Ceiling check (from eye position, only when moving up)
         if velocity.y > 0.0 {
             let head_clearance = PLAYER_HEIGHT - EYE_HEIGHT;
             let eye_origin = desired_position + Vec3::new(0.0, EYE_HEIGHT, 0.0);

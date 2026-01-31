@@ -1,5 +1,3 @@
-// Simple shader for rendering players as colored shapes
-
 struct CameraUniform {
     view_proj: mat4x4<f32>,
 };
@@ -36,7 +34,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Simple directional lighting
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
     let normal = normalize(in.world_normal);
     let diffuse = max(dot(normal, light_dir), 0.0);

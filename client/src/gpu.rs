@@ -1,7 +1,6 @@
 use bytemuck::Pod;
 use wgpu::util::DeviceExt;
 
-/// Create a texture, upload data, create view and bind group
 #[allow(clippy::too_many_arguments)]
 pub fn create_texture_with_bind_group(
     device: &wgpu::Device,
@@ -67,7 +66,6 @@ pub fn create_texture_with_bind_group(
     (texture, view, bind_group)
 }
 
-/// Create a uniform buffer initialized with data
 pub fn create_uniform_buffer<T: Pod>(device: &wgpu::Device, data: &T, label: &str) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -76,7 +74,6 @@ pub fn create_uniform_buffer<T: Pod>(device: &wgpu::Device, data: &T, label: &st
     })
 }
 
-/// Create vertex/index buffers from slices
 pub fn create_vertex_buffer<T: Pod>(
     device: &wgpu::Device,
     data: &[T],
@@ -97,7 +94,6 @@ pub fn create_index_buffer(device: &wgpu::Device, data: &[u32], label: &str) -> 
     })
 }
 
-/// Create placeholder magenta/black checker texture
 pub fn create_placeholder_bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -128,7 +124,6 @@ pub fn create_placeholder_bind_group(
     bind_group
 }
 
-/// Create depth texture and view
 pub fn create_depth_texture(
     device: &wgpu::Device,
     width: u32,
@@ -152,7 +147,6 @@ pub fn create_depth_texture(
     (texture, view)
 }
 
-/// Standard texture bind group layout (texture + sampler)
 pub fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Texture Bind Group Layout"),
@@ -177,7 +171,6 @@ pub fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
     })
 }
 
-/// Bind group layout for a depth texture + sampler (for sampling depth value in postprocess)
 pub fn depth_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Depth Texture Bind Group Layout"),
@@ -202,7 +195,6 @@ pub fn depth_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroup
     })
 }
 
-/// Camera uniform bind group layout
 pub fn camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Camera Bind Group Layout"),
@@ -219,7 +211,6 @@ pub fn camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
     })
 }
 
-/// Uniform bind group layout (vertex + fragment visibility)
 pub fn uniform_bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(label),
@@ -236,8 +227,6 @@ pub fn uniform_bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu::Bi
     })
 }
 
-/// Create a color texture suitable as a render target (scene buffer for post-processing).
-/// Returns (texture, view). Format should match the surface format used as fragment target.
 pub fn create_render_target_texture(
     device: &wgpu::Device,
     width: u32,

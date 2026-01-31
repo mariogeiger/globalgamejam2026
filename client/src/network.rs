@@ -1,4 +1,3 @@
-use crate::player::{PlayerStateMessage, Team};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -12,53 +11,59 @@ use web_sys::{
     RtcSessionDescriptionInit, Url, WebSocket,
 };
 
-fn signaling_server_url() -> String {
-    if let Some(window) = web_sys::window() {
-        let location = window.location();
-        if let Ok(href) = location.href()
-            && let Ok(url) = Url::new(&href)
-        {
-            let protocol = url.protocol();
-            let host = url.host();
-            let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-            return format!("{}//{}/ws", ws_protocol, host);
-        }
-    }
-    "wss://localhost/ws".to_string()
-}
+use crate::team::Team;
 
-fn stun_servers() -> Vec<String> {
-    let mut servers = vec![
-        "stun:stun.l.google.com:19302".to_string(),
-        "stun:stun1.l.google.com:19302".to_string(),
-    ];
-    if let Some(window) = web_sys::window() {
-        let location = window.location();
-        if let Ok(href) = location.href()
-            && let Ok(url) = Url::new(&href)
-        {
-            let hostname = url.hostname();
-            if !hostname.is_empty() && hostname != "localhost" {
-                servers.insert(0, format!("stun:{}:3478", hostname));
-            }
-        }
-    }
-    servers
-}
+pub type PeerId = u64;
 
-type PeerId = u64;
+#[derive(Clone, Debug)]
+pub enum NetworkEvent {
+    TeamAssigned(Team),
+    PeerJoined {
+        id: PeerId,
+        team: Team,
+    },
+    PeerLeft {
+        id: PeerId,
+    },
+    PlayerState {
+        id: PeerId,
+        position: Vec3,
+        yaw: f32,
+    },
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GameMessage {
-    pub msg_type: String,
+struct PlayerStateMessage {
+    msg_type: String,
+    x: f32,
+    y: f32,
+    z: f32,
+    yaw: f32,
+}
+
+impl PlayerStateMessage {
+    fn new(position: Vec3, yaw: f32) -> Self {
+        Self {
+            msg_type: "player_state".to_string(),
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            yaw,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GameMessage {
+    msg_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub x: Option<f32>,
+    x: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<f32>,
+    y: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub z: Option<f32>,
+    z: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub yaw: Option<f32>,
+    yaw: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -117,35 +122,32 @@ struct PeerConnection {
     pc: RtcPeerConnection,
     data_channel: Option<RtcDataChannel>,
     team: Team,
-    pending_candidates: Vec<IceCandidate>,
+    pending_candidates: Vec<IceCandidateData>,
 }
 
 #[derive(Clone)]
-struct IceCandidate {
+struct IceCandidateData {
     candidate: String,
     sdp_mid: Option<String>,
     sdp_m_line_index: Option<u16>,
 }
 
 #[derive(Default)]
-#[allow(clippy::type_complexity)]
 struct RtcState {
+    #[allow(dead_code)]
     local_id: Option<PeerId>,
     local_team: Option<Team>,
     peers: HashMap<PeerId, PeerConnection>,
-    on_player_state: Option<Box<dyn Fn(PeerId, Vec3, f32)>>,
-    on_team_assign: Option<Box<dyn Fn(Team)>>,
-    on_peer_joined: Option<Box<dyn Fn(PeerId, Team)>>,
-    on_peer_left: Option<Box<dyn Fn(PeerId)>>,
+    pending_events: Vec<NetworkEvent>,
 }
 
 type StateRef = Rc<RefCell<RtcState>>;
 
-pub struct WebRtcClient {
+pub struct NetworkClient {
     state: StateRef,
 }
 
-impl WebRtcClient {
+impl NetworkClient {
     pub fn new() -> Result<Self, JsValue> {
         let state: StateRef = Rc::new(RefCell::new(RtcState::default()));
         let server_url = signaling_server_url();
@@ -153,7 +155,6 @@ impl WebRtcClient {
         let ws = WebSocket::new(&server_url)?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
-        // WebSocket open
         let ws_clone = ws.clone();
         set_callback(&ws, "onopen", move |_: JsValue| {
             log::info!("Connected to signaling server");
@@ -161,7 +162,6 @@ impl WebRtcClient {
             let _ = ws_clone.send_with_str(r#"{"type":"join"}"#);
         });
 
-        // WebSocket message
         let state_clone = state.clone();
         let ws_clone = ws.clone();
         set_callback(&ws, "onmessage", move |ev: MessageEvent| {
@@ -174,7 +174,6 @@ impl WebRtcClient {
             }
         });
 
-        // WebSocket error/close
         set_callback(&ws, "onerror", |_: JsValue| {
             log::error!("WebSocket error");
             update_status("Connection error. Is the server running?");
@@ -185,6 +184,11 @@ impl WebRtcClient {
         });
 
         Ok(Self { state })
+    }
+
+    pub fn poll_events(&self) -> Vec<NetworkEvent> {
+        let mut state = self.state.borrow_mut();
+        std::mem::take(&mut state.pending_events)
     }
 
     pub fn send_player_state(&self, position: Vec3, yaw: f32) {
@@ -200,21 +204,43 @@ impl WebRtcClient {
         }
     }
 
-    pub fn set_on_player_state<F: Fn(PeerId, Vec3, f32) + 'static>(&self, callback: F) {
-        self.state.borrow_mut().on_player_state = Some(Box::new(callback));
+    pub fn is_connected(&self) -> bool {
+        self.state.borrow().local_team.is_some()
     }
+}
 
-    pub fn set_on_team_assign<F: Fn(Team) + 'static>(&self, callback: F) {
-        self.state.borrow_mut().on_team_assign = Some(Box::new(callback));
+fn signaling_server_url() -> String {
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        if let Ok(href) = location.href()
+            && let Ok(url) = Url::new(&href)
+        {
+            let protocol = url.protocol();
+            let host = url.host();
+            let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+            return format!("{}//{}/ws", ws_protocol, host);
+        }
     }
+    "wss://localhost/ws".to_string()
+}
 
-    pub fn set_on_peer_joined<F: Fn(PeerId, Team) + 'static>(&self, callback: F) {
-        self.state.borrow_mut().on_peer_joined = Some(Box::new(callback));
+fn stun_servers() -> Vec<String> {
+    let mut servers = vec![
+        "stun:stun.l.google.com:19302".to_string(),
+        "stun:stun1.l.google.com:19302".to_string(),
+    ];
+    if let Some(window) = web_sys::window() {
+        let location = window.location();
+        if let Ok(href) = location.href()
+            && let Ok(url) = Url::new(&href)
+        {
+            let hostname = url.hostname();
+            if !hostname.is_empty() && hostname != "localhost" {
+                servers.insert(0, format!("stun:{}:3478", hostname));
+            }
+        }
     }
-
-    pub fn set_on_peer_left<F: Fn(PeerId) + 'static>(&self, callback: F) {
-        self.state.borrow_mut().on_peer_left = Some(Box::new(callback));
-    }
+    servers
 }
 
 fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
@@ -239,9 +265,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     let mut s = state.borrow_mut();
                     s.local_id = Some(client_id);
                     s.local_team = Some(team);
-                    if let Some(ref cb) = s.on_team_assign {
-                        cb(team);
-                    }
+                    s.pending_events.push(NetworkEvent::TeamAssigned(team));
                 }
 
                 let status = format!(
@@ -252,7 +276,6 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                 );
                 update_status(&status);
 
-                // Create peer connections and send offers to all existing peers
                 for peer_info in peers {
                     if let Ok(pc) = create_peer_connection(&ws, &state, peer_info.id) {
                         let dc = pc.create_data_channel("game-sync");
@@ -269,12 +292,12 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                                     pending_candidates: Vec::new(),
                                 },
                             );
-                            if let Some(ref cb) = s.on_peer_joined {
-                                cb(peer_info.id, peer_info.team);
-                            }
+                            s.pending_events.push(NetworkEvent::PeerJoined {
+                                id: peer_info.id,
+                                team: peer_info.team,
+                            });
                         }
 
-                        // Create and send offer
                         if let Ok(offer) =
                             wasm_bindgen_futures::JsFuture::from(pc.create_offer()).await
                         {
@@ -294,7 +317,6 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             ServerMessage::PeerJoined { peer_id, team } => {
                 log::info!("Peer {} joined on team {:?}", peer_id, team);
 
-                // Create a placeholder peer connection (will receive offer from them)
                 if let Ok(pc) = create_peer_connection(&ws, &state, peer_id) {
                     let mut s = state.borrow_mut();
                     s.peers.insert(
@@ -306,31 +328,25 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                             pending_candidates: Vec::new(),
                         },
                     );
-                    if let Some(ref cb) = s.on_peer_joined {
-                        cb(peer_id, team);
-                    }
+                    s.pending_events
+                        .push(NetworkEvent::PeerJoined { id: peer_id, team });
                 }
-
                 update_peer_count(&state);
             }
             ServerMessage::PeerLeft { peer_id } => {
                 log::info!("Peer {} left", peer_id);
-
                 {
                     let mut s = state.borrow_mut();
                     if let Some(peer) = s.peers.remove(&peer_id) {
                         peer.pc.close();
                     }
-                    if let Some(ref cb) = s.on_peer_left {
-                        cb(peer_id);
-                    }
+                    s.pending_events
+                        .push(NetworkEvent::PeerLeft { id: peer_id });
                 }
-
                 update_peer_count(&state);
             }
             ServerMessage::Offer { from_id, sdp } => {
                 log::info!("Received offer from peer {}", from_id);
-
                 let pc = state.borrow().peers.get(&from_id).map(|p| p.pc.clone());
 
                 if let Some(pc) = pc {
@@ -341,7 +357,6 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .is_ok()
                     {
                         apply_pending_candidates(&pc, &state, from_id).await;
-
                         if let Ok(answer) =
                             wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await
                         {
@@ -360,9 +375,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             }
             ServerMessage::Answer { from_id, sdp } => {
                 log::info!("Received answer from peer {}", from_id);
-
                 let pc = state.borrow().peers.get(&from_id).map(|p| p.pc.clone());
-
                 if let Some(pc) = pc {
                     let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
                     desc.set_sdp(&sdp);
@@ -383,8 +396,10 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                 let (has_remote, pc) = {
                     let s = state.borrow();
                     if let Some(peer) = s.peers.get(&from_id) {
-                        let has = peer.pc.remote_description().is_some();
-                        (has, Some(peer.pc.clone()))
+                        (
+                            peer.pc.remote_description().is_some(),
+                            Some(peer.pc.clone()),
+                        )
                     } else {
                         (false, None)
                     }
@@ -394,7 +409,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     if let Some(pc) = pc {
                         add_ice_candidate(
                             &pc,
-                            &IceCandidate {
+                            &IceCandidateData {
                                 candidate,
                                 sdp_mid,
                                 sdp_m_line_index,
@@ -403,10 +418,9 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .await;
                     }
                 } else {
-                    // Queue the candidate
                     let mut s = state.borrow_mut();
                     if let Some(peer) = s.peers.get_mut(&from_id) {
-                        peer.pending_candidates.push(IceCandidate {
+                        peer.pending_candidates.push(IceCandidateData {
                             candidate,
                             sdp_mid,
                             sdp_m_line_index,
@@ -436,7 +450,6 @@ fn create_peer_connection(
 
     let pc = RtcPeerConnection::new_with_configuration(&config)?;
 
-    // ICE candidate handler
     let ws_clone = ws.clone();
     let onicecandidate = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcPeerConnectionIceEvent = ev.unchecked_into();
@@ -454,7 +467,6 @@ fn create_peer_connection(
     pc.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
     onicecandidate.forget();
 
-    // ICE connection state change
     let state_clone = state.clone();
     let onice = Closure::wrap(Box::new(move |ev: JsValue| {
         if let Some(pc) = ev.dyn_ref::<RtcPeerConnection>() {
@@ -464,10 +476,10 @@ fn create_peer_connection(
                     update_peer_count(&state_clone);
                 }
                 web_sys::RtcIceConnectionState::Failed => {
-                    log::warn!("Peer {} connection failed", peer_id);
+                    log::warn!("Peer {} connection failed", peer_id)
                 }
                 web_sys::RtcIceConnectionState::Disconnected => {
-                    log::warn!("Peer {} disconnected", peer_id);
+                    log::warn!("Peer {} disconnected", peer_id)
                 }
                 _ => {}
             }
@@ -476,7 +488,6 @@ fn create_peer_connection(
     pc.set_oniceconnectionstatechange(Some(onice.as_ref().unchecked_ref()));
     onice.forget();
 
-    // Data channel handler (for answerer side)
     let state_clone = state.clone();
     let ondc = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcDataChannelEvent = ev.unchecked_into();
@@ -515,10 +526,12 @@ fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
         if msg.msg_type == "player_state"
             && let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw)
         {
-            let s = state_clone.borrow();
-            if let Some(ref cb) = s.on_player_state {
-                cb(peer_id, Vec3::new(x, y, z), yaw);
-            }
+            let mut s = state_clone.borrow_mut();
+            s.pending_events.push(NetworkEvent::PlayerState {
+                id: peer_id,
+                position: Vec3::new(x, y, z),
+                yaw,
+            });
         }
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onmessage(Some(onmsg.as_ref().unchecked_ref()));
@@ -526,7 +539,7 @@ fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
 }
 
 async fn apply_pending_candidates(pc: &RtcPeerConnection, state: &StateRef, peer_id: PeerId) {
-    let pending: Vec<IceCandidate> = {
+    let pending: Vec<IceCandidateData> = {
         let mut s = state.borrow_mut();
         if let Some(peer) = s.peers.get_mut(&peer_id) {
             peer.pending_candidates.drain(..).collect()
@@ -539,7 +552,7 @@ async fn apply_pending_candidates(pc: &RtcPeerConnection, state: &StateRef, peer
     }
 }
 
-async fn add_ice_candidate(pc: &RtcPeerConnection, ice: &IceCandidate) {
+async fn add_ice_candidate(pc: &RtcPeerConnection, ice: &IceCandidateData) {
     let init = RtcIceCandidateInit::new(&ice.candidate);
     if let Some(ref mid) = ice.sdp_mid {
         init.set_sdp_mid(Some(mid));
@@ -563,20 +576,12 @@ fn get_sdp(js: &JsValue) -> String {
 }
 
 fn send_offer(ws: &WebSocket, target_id: PeerId, sdp: &str) {
-    let msg = serde_json::json!({
-        "type": "offer",
-        "targetId": target_id,
-        "sdp": sdp
-    });
+    let msg = serde_json::json!({ "type": "offer", "targetId": target_id, "sdp": sdp });
     let _ = ws.send_with_str(&msg.to_string());
 }
 
 fn send_answer(ws: &WebSocket, target_id: PeerId, sdp: &str) {
-    let msg = serde_json::json!({
-        "type": "answer",
-        "targetId": target_id,
-        "sdp": sdp
-    });
+    let msg = serde_json::json!({ "type": "answer", "targetId": target_id, "sdp": sdp });
     let _ = ws.send_with_str(&msg.to_string());
 }
 
@@ -619,63 +624,11 @@ fn update_peer_count(state: &StateRef) {
     let total_count = s.peers.len();
 
     let status = if connected_count == total_count && total_count > 0 {
-        format!(
-            "Connected! {} player(s) in game.",
-            total_count + 1 // +1 for self
-        )
+        format!("Connected! {} player(s) in game.", total_count + 1)
     } else if total_count > 0 {
         format!("Connecting... {}/{} peers", connected_count, total_count)
     } else {
         "Waiting for other players...".to_string()
     };
     update_status(&status);
-}
-
-thread_local! {
-    pub static WEBRTC_CLIENT: RefCell<Option<WebRtcClient>> = const { RefCell::new(None) };
-}
-
-pub fn init_webrtc_client() {
-    let client = WebRtcClient::new().expect("Failed to create WebRTC client");
-    WEBRTC_CLIENT.with(|c| *c.borrow_mut() = Some(client));
-}
-
-pub fn send_player_state_to_peers(position: Vec3, yaw: f32) {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.send_player_state(position, yaw);
-        }
-    });
-}
-
-pub fn set_player_state_callback<F: Fn(PeerId, Vec3, f32) + 'static>(callback: F) {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_player_state(callback);
-        }
-    });
-}
-
-pub fn set_team_assign_callback<F: Fn(Team) + 'static>(callback: F) {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_team_assign(callback);
-        }
-    });
-}
-
-pub fn set_peer_joined_callback<F: Fn(PeerId, Team) + 'static>(callback: F) {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_peer_joined(callback);
-        }
-    });
-}
-
-pub fn set_peer_left_callback<F: Fn(PeerId) + 'static>(callback: F) {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = *c.borrow() {
-            client.set_on_peer_left(callback);
-        }
-    });
 }
