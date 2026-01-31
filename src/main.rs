@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
-use rand::prelude::*;
+use rand::Rng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -246,7 +246,7 @@ impl GpuState {
                 })
                 .collect();
 
-            let spawn_idx = rand::thread_rng().gen_range(0..loaded_map.spawn_points.len());
+            let spawn_idx = rand::rng().random_range(0..loaded_map.spawn_points.len());
             let initial_spawn = loaded_map.spawn_points[spawn_idx];
             let player = Player::new(initial_spawn);
             let physics = PhysicsWorld::new(
@@ -402,7 +402,7 @@ impl GpuState {
 
             if outside && !self.spawn_points.is_empty() {
                 log::info!("Player fell out of map, respawning");
-                let idx = rand::thread_rng().gen_range(0..self.spawn_points.len());
+                let idx = rand::rng().random_range(0..self.spawn_points.len());
                 self.player.respawn(self.spawn_points[idx]);
             }
         }
