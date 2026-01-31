@@ -5,8 +5,6 @@ pub struct PhysicsWorld {
     pub rigid_body_set: RigidBodySet,
     pub collider_set: ColliderSet,
     pub query_pipeline: QueryPipeline,
-    
-    #[allow(dead_code)]
     pub player_body_handle: RigidBodyHandle,
     pub player_collider_handle: ColliderHandle,
 }

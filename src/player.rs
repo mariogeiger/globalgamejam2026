@@ -136,12 +136,6 @@ impl Player {
         Mat4::look_at_rh(eye, target, Vec3::Y)
     }
     
-    /// Get player forward direction (horizontal only)
-    #[allow(dead_code)]
-    pub fn forward(&self) -> Vec3 {
-        Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()).normalize()
-    }
-    
     /// Set ground state and handle landing
     pub fn set_on_ground(&mut self, on_ground: bool, ground_y: Option<f32>) {
         if on_ground && !self.on_ground {

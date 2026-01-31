@@ -11,8 +11,8 @@ pub enum Team {
 impl Team {
     pub fn color(&self) -> [f32; 4] {
         match self {
-            Team::A => [0.2, 0.4, 1.0, 1.0],  // Blue
-            Team::B => [1.0, 0.3, 0.2, 1.0],  // Red
+            Team::A => [0.2, 0.4, 1.0, 1.0],
+            Team::B => [1.0, 0.3, 0.2, 1.0],
         }
     }
     
@@ -51,7 +51,6 @@ impl RemotePlayer {
     }
     
     pub fn model_matrix(&self) -> Mat4 {
-        // Position the player, rotate by yaw
         Mat4::from_translation(self.position)
             * Mat4::from_rotation_y(self.yaw)
     }
@@ -76,12 +75,6 @@ impl PlayerStateMessage {
             yaw,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TeamAssignMessage {
-    pub msg_type: String,
-    pub team: String,
 }
 
 // Player mesh vertex

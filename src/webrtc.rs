@@ -9,7 +9,7 @@ use web_sys::{
 };
 use serde::{Deserialize, Serialize};
 use glam::Vec3;
-use crate::network_player::{Team, RemotePlayer, PlayerStateMessage};
+use crate::network_player::{Team, PlayerStateMessage};
 
 const SIGNALING_SERVER: &str = "wss://ggj26.cheapmo.ch";
 
@@ -42,22 +42,15 @@ struct SignalMessage {
     sdp_m_line_index: Option<u16>,
 }
 
+#[allow(clippy::type_complexity)]
 pub struct WebRtcClient {
-    #[allow(dead_code)]
-    ws: WebSocket,
-    #[allow(dead_code)]
-    pc: Rc<RefCell<Option<RtcPeerConnection>>>,
     data_channel: Rc<RefCell<Option<RtcDataChannel>>>,
     on_player_state: Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
     on_team_assign: Rc<RefCell<Option<Box<dyn Fn(Team)>>>>,
-    local_team: Rc<RefCell<Option<Team>>>,
-    #[allow(dead_code)]
-    connected: Rc<RefCell<bool>>,
-    #[allow(dead_code)]
-    pending_candidates: Rc<RefCell<Vec<SignalMessage>>>,
 }
 
 impl WebRtcClient {
+    #[allow(clippy::type_complexity)]
     pub fn new() -> Result<Self, JsValue> {
         let ws = WebSocket::new(SIGNALING_SERVER)?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
@@ -70,20 +63,17 @@ impl WebRtcClient {
         let connected = Rc::new(RefCell::new(false));
         let pending_candidates: Rc<RefCell<Vec<SignalMessage>>> = Rc::new(RefCell::new(Vec::new()));
         
-        // WebSocket open handler
         let ws_clone = ws.clone();
         let onopen = Closure::wrap(Box::new(move |_: JsValue| {
             log::info!("Connected to signaling server");
             update_status("Connected to server, waiting for peer...");
             
-            // Send join message
             let msg = serde_json::json!({ "type": "join" });
             let _ = ws_clone.send_with_str(&msg.to_string());
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
         onopen.forget();
         
-        // WebSocket message handler
         let ws_for_msg = ws.clone();
         let pc_for_msg = pc.clone();
         let dc_for_msg = data_channel.clone();
@@ -113,7 +103,6 @@ impl WebRtcClient {
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         onmessage.forget();
         
-        // WebSocket error handler
         let onerror = Closure::wrap(Box::new(move |e: JsValue| {
             log::error!("WebSocket error: {:?}", e);
             update_status("Connection error. Is the server running?");
@@ -121,7 +110,6 @@ impl WebRtcClient {
         ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         onerror.forget();
         
-        // WebSocket close handler
         let onclose = Closure::wrap(Box::new(move |_: JsValue| {
             log::info!("WebSocket closed");
             update_status("Disconnected from server");
@@ -130,14 +118,9 @@ impl WebRtcClient {
         onclose.forget();
         
         Ok(Self {
-            ws,
-            pc,
             data_channel,
             on_player_state,
             on_team_assign,
-            local_team,
-            connected,
-            pending_candidates,
         })
     }
     
@@ -159,12 +142,11 @@ impl WebRtcClient {
     pub fn set_on_team_assign<F: Fn(Team) + 'static>(&self, callback: F) {
         *self.on_team_assign.borrow_mut() = Some(Box::new(callback));
     }
-    
-    pub fn get_local_team(&self) -> Option<Team> {
-        *self.local_team.borrow()
-    }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+#[allow(clippy::await_holding_refcell_ref)]
 fn handle_signal_message(
     ws: &WebSocket,
     pc_cell: &Rc<RefCell<Option<RtcPeerConnection>>>,
@@ -361,6 +343,7 @@ async fn add_ice_candidate(pc: &RtcPeerConnection, candidate: &str, sdp_mid: &Op
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn create_peer_connection(
     ws: &WebSocket,
     dc_cell: &Rc<RefCell<Option<RtcDataChannel>>>,
@@ -445,6 +428,7 @@ fn create_peer_connection(
     Ok(pc)
 }
 
+#[allow(clippy::type_complexity)]
 fn setup_data_channel(
     dc: &RtcDataChannel,
     on_player_state: &Rc<RefCell<Option<Box<dyn Fn(Vec3, f32)>>>>,
@@ -534,14 +518,4 @@ pub fn set_team_assign_callback<F: Fn(Team) + 'static>(callback: F) {
             client.set_on_team_assign(callback);
         }
     });
-}
-
-pub fn get_local_team() -> Option<Team> {
-    WEBRTC_CLIENT.with(|c| {
-        if let Some(ref client) = c.borrow().as_ref() {
-            client.get_local_team()
-        } else {
-            None
-        }
-    })
 }

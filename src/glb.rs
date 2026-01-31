@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
 use glam::Vec3;
 use gltf::image::Format;
 
@@ -32,16 +30,6 @@ pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
     [13.5, 29.0, 2.0],
 ];
 
-/// Load GLB from file path (native only)
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_glb(path: &Path) -> Result<LoadedMap, String> {
-    let (document, buffers, images) = gltf::import(path)
-        .map_err(|e| format!("Failed to load GLB: {}", e))?;
-    
-    load_glb_data(document, buffers, images)
-}
-
-/// Load GLB from embedded bytes (for WASM)
 pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
     let (document, buffers, images) = gltf::import_slice(data)
         .map_err(|e| format!("Failed to load GLB from bytes: {}", e))?;
@@ -192,7 +180,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
     match image.format {
         Format::R8G8B8A8 => image.pixels.clone(),
         Format::R8G8B8 => {
-            // Convert RGB to RGBA
             let mut rgba = Vec::with_capacity(image.pixels.len() / 3 * 4);
             for chunk in image.pixels.chunks(3) {
                 rgba.extend_from_slice(chunk);
@@ -201,7 +188,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             rgba
         }
         Format::R8 => {
-            // Grayscale to RGBA
             let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
             for &gray in &image.pixels {
                 rgba.extend_from_slice(&[gray, gray, gray, 255]);
@@ -209,7 +195,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             rgba
         }
         Format::R8G8 => {
-            // RG to RGBA (assume RG is grayscale + alpha)
             let mut rgba = Vec::with_capacity(image.pixels.len() * 2);
             for chunk in image.pixels.chunks(2) {
                 rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
@@ -217,7 +202,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             rgba
         }
         Format::R16 | Format::R16G16 | Format::R16G16B16 | Format::R16G16B16A16 => {
-            // 16-bit formats - convert to 8-bit
             let bytes_per_channel = 2;
             let channels = match image.format {
                 Format::R16 => 1,
@@ -238,11 +222,9 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
                     ]);
                     rgba.push((val >> 8) as u8);
                 }
-                // Pad missing channels
                 for _ in channels..3 {
                     rgba.push(if channels == 1 { rgba[rgba.len() - 1] } else { 0 });
                 }
-                // Alpha
                 if channels == 4 {
                     let val = u16::from_le_bytes([
                         image.pixels[base + 6],
@@ -256,7 +238,6 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             rgba
         }
         Format::R32G32B32FLOAT | Format::R32G32B32A32FLOAT => {
-            // 32-bit float formats
             let channels = if matches!(image.format, Format::R32G32B32FLOAT) { 3 } else { 4 };
             let pixel_count = image.pixels.len() / (4 * channels);
             let mut rgba = Vec::with_capacity(pixel_count * 4);
@@ -291,36 +272,5 @@ fn convert_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
             }
             rgba
         }
-    }
-}
-
-fn find_spawn_point(document: &gltf::Document) -> Option<Vec3> {
-    // Look for a node named "spawn" or "player_start" or similar
-    for node in document.nodes() {
-        let name = node.name().unwrap_or("").to_lowercase();
-        if name.contains("spawn") || name.contains("player") || name.contains("start") {
-            let (translation, _, _) = node.transform().decomposed();
-            // Flip Y to match our coordinate system
-            return Some(Vec3::new(translation[0], -translation[1], translation[2]));
-        }
-    }
-    
-    // If no spawn point, calculate center of the scene
-    let mut min = Vec3::splat(f32::MAX);
-    let mut max = Vec3::splat(f32::MIN);
-    
-    for node in document.nodes() {
-        let (translation, _, _) = node.transform().decomposed();
-        // Flip Y
-        let pos = Vec3::new(translation[0], -translation[1], translation[2]);
-        min = min.min(pos);
-        max = max.max(pos);
-    }
-    
-    if min.x < f32::MAX {
-        let center = (min + max) / 2.0;
-        Some(Vec3::new(center.x, max.y + 100.0, center.z))
-    } else {
-        None
     }
 }
