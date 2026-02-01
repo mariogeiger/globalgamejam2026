@@ -7,6 +7,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod audio;
 mod collision;
 mod config;
 mod game;
@@ -18,6 +19,7 @@ mod network;
 mod player;
 mod render;
 
+use audio::Audio;
 use config::DEBUG_MANNEQUINS;
 use game::GameState;
 use glb::load_mesh_from_bytes;
@@ -33,6 +35,7 @@ struct ClientState {
     game: GameState,
     input: InputState,
     network: NetworkClient,
+    audio: Audio,
 }
 
 struct App {
@@ -102,11 +105,13 @@ impl ApplicationHandler for App {
             let input = InputState::new();
             let network = NetworkClient::new().expect("Failed to create network client");
 
+            let audio = Audio::new();
             let state = ClientState {
                 renderer,
                 game,
                 input,
                 network,
+                audio,
             };
 
             STATE.with(|s| *s.borrow_mut() = Some(state));
@@ -199,6 +204,13 @@ impl ApplicationHandler for App {
                         }
 
                         state.game.update(&mut state.input);
+
+                        let (progress, has_target) = state.game.get_targeting_info();
+                        state.audio.update_charge(has_target, progress);
+
+                        for _ in 0..state.game.take_death_sounds() {
+                            state.audio.play_death();
+                        }
 
                         // Send any kills we made this frame
                         for victim_id in state.game.take_pending_kills() {
