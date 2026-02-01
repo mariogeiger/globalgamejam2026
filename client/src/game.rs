@@ -284,6 +284,9 @@ impl GameState {
             }
             NetworkEvent::PeerJoined { id } => {
                 log::info!("Peer {} joined", id);
+                // Remove mannequins when a real player connects
+                self.remote_players.remove(&u64::MAX);
+                self.remote_players.remove(&(u64::MAX - 1));
                 let remote = RemotePlayer::new();
                 self.remote_players.insert(id, remote);
                 self.update_player_count_display();
