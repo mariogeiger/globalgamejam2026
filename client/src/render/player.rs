@@ -3,35 +3,10 @@ use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::config::*;
-use crate::gpu::uniform_bind_group_layout;
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct PlayerVertex {
-    pub position: [f32; 3],
-    pub normal: [f32; 3],
-}
-
-impl PlayerVertex {
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
-        }
-    }
-}
+use crate::gpu::{
+    create_texture_with_bind_group, texture_bind_group_layout, uniform_bind_group_layout,
+};
+use crate::mesh::{TextureData, Vertex};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -40,7 +15,7 @@ pub struct PlayerUniform {
     pub color: [f32; 4],
 }
 
-pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
+pub fn generate_player_box() -> (Vec<Vertex>, Vec<u32>) {
     let hw = PLAYER_WIDTH / 2.0;
     let hd = PLAYER_WIDTH / 2.0;
     let head_height = 2.0 * (PLAYER_HEIGHT - EYE_HEIGHT);
@@ -109,9 +84,12 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
         ];
         for (normal, positions) in faces {
             let base = vertices.len() as u32;
-            for pos in positions {
-                vertices.push(PlayerVertex {
-                    position: pos,
+            // Simple UV mapping for each face quad
+            let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            for (pos, uv) in positions.iter().zip(uvs.iter()) {
+                vertices.push(Vertex {
+                    position: *pos,
+                    tex_coord: *uv,
                     normal,
                 });
             }
@@ -146,46 +124,58 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
         edge1.cross(edge2).normalize()
     };
 
+    // Head left face
     let base = vertices.len() as u32;
-    for pos in [bl, tl, ft, fb] {
-        vertices.push(PlayerVertex {
-            position: pos,
+    let uvs4 = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    for (pos, uv) in [bl, tl, ft, fb].iter().zip(uvs4.iter()) {
+        vertices.push(Vertex {
+            position: *pos,
+            tex_coord: *uv,
             normal: [left_normal.x, left_normal.y, left_normal.z],
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
+    // Head right face
     let base = vertices.len() as u32;
-    for pos in [br, fb, ft, tr] {
-        vertices.push(PlayerVertex {
-            position: pos,
+    for (pos, uv) in [br, fb, ft, tr].iter().zip(uvs4.iter()) {
+        vertices.push(Vertex {
+            position: *pos,
+            tex_coord: *uv,
             normal: [right_normal.x, right_normal.y, right_normal.z],
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
+    // Head back face
     let base = vertices.len() as u32;
-    for pos in [bl, br, tr, tl] {
-        vertices.push(PlayerVertex {
-            position: pos,
+    for (pos, uv) in [bl, br, tr, tl].iter().zip(uvs4.iter()) {
+        vertices.push(Vertex {
+            position: *pos,
+            tex_coord: *uv,
             normal: [0.0, 0.0, 1.0],
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
+    // Head top triangle
     let base = vertices.len() as u32;
-    for pos in [tl, tr, ft] {
-        vertices.push(PlayerVertex {
-            position: pos,
+    let uvs3 = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]];
+    for (pos, uv) in [tl, tr, ft].iter().zip(uvs3.iter()) {
+        vertices.push(Vertex {
+            position: *pos,
+            tex_coord: *uv,
             normal: [0.0, 1.0, 0.0],
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2]);
 
+    // Head bottom triangle
     let base = vertices.len() as u32;
-    for pos in [bl, fb, br] {
-        vertices.push(PlayerVertex {
-            position: pos,
+    for (pos, uv) in [bl, fb, br].iter().zip(uvs3.iter()) {
+        vertices.push(Vertex {
+            position: *pos,
+            tex_coord: *uv,
             normal: [0.0, -1.0, 0.0],
         });
     }
@@ -198,9 +188,11 @@ pub struct PlayerRenderer {
     player_vertex_buffer: wgpu::Buffer,
     player_index_buffer: wgpu::Buffer,
     player_index_count: u32,
+    player_texture_bind_group: wgpu::BindGroup,
     tombstone_vertex_buffer: wgpu::Buffer,
     tombstone_index_buffer: wgpu::Buffer,
     tombstone_index_count: u32,
+    tombstone_texture_bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     uniform_layout: wgpu::BindGroupLayout,
     uniform_pool: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
@@ -209,10 +201,12 @@ pub struct PlayerRenderer {
 impl PlayerRenderer {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         camera_layout: &wgpu::BindGroupLayout,
         surface_format: wgpu::TextureFormat,
-        tombstone_vertices: &[PlayerVertex],
+        tombstone_vertices: &[Vertex],
         tombstone_indices: &[u32],
+        tombstone_texture: Option<&TextureData>,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Player Shader"),
@@ -220,10 +214,11 @@ impl PlayerRenderer {
         });
 
         let uniform_layout = uniform_bind_group_layout(device, "Player Uniform Layout");
+        let texture_layout = texture_bind_group_layout(device);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Player Pipeline Layout"),
-            bind_group_layouts: &[camera_layout, &uniform_layout],
+            bind_group_layouts: &[camera_layout, &uniform_layout, &texture_layout],
             immediate_size: 0,
         });
 
@@ -233,7 +228,7 @@ impl PlayerRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[PlayerVertex::desc()],
+                buffers: &[Vertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -248,7 +243,7 @@ impl PlayerRenderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -290,13 +285,65 @@ impl PlayerRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        // Create sampler for textures
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Create white texture for player (will be tinted by color)
+        let white_pixel: [u8; 4] = [255, 255, 255, 255];
+        let (_, _, player_texture_bind_group) = create_texture_with_bind_group(
+            device,
+            queue,
+            &texture_layout,
+            &sampler,
+            &white_pixel,
+            1,
+            1,
+            "Player White Texture",
+        );
+
+        // Create tombstone texture (or white fallback)
+        let tombstone_texture_bind_group = if let Some(tex) = tombstone_texture {
+            let (_, _, bind_group) = create_texture_with_bind_group(
+                device,
+                queue,
+                &texture_layout,
+                &sampler,
+                &tex.rgba,
+                tex.width,
+                tex.height,
+                "Tombstone Texture",
+            );
+            bind_group
+        } else {
+            // Fallback to white texture
+            let (_, _, bind_group) = create_texture_with_bind_group(
+                device,
+                queue,
+                &texture_layout,
+                &sampler,
+                &white_pixel,
+                1,
+                1,
+                "Tombstone Fallback Texture",
+            );
+            bind_group
+        };
+
         Self {
             player_vertex_buffer,
             player_index_buffer,
             player_index_count: player_indices.len() as u32,
+            player_texture_bind_group,
             tombstone_vertex_buffer,
             tombstone_index_buffer,
             tombstone_index_count: tombstone_indices.len() as u32,
+            tombstone_texture_bind_group,
             pipeline,
             uniform_layout,
             uniform_pool: Vec::new(),
@@ -352,6 +399,7 @@ impl PlayerRenderer {
                 self.player_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
+            pass.set_bind_group(2, &self.player_texture_bind_group, &[]);
 
             for (i, (model, color)) in alive_players.iter().enumerate() {
                 let uniform = PlayerUniform {
@@ -372,6 +420,7 @@ impl PlayerRenderer {
                 self.tombstone_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
+            pass.set_bind_group(2, &self.tombstone_texture_bind_group, &[]);
 
             for (i, (model, color)) in dead_players.iter().enumerate() {
                 let uniform = PlayerUniform {

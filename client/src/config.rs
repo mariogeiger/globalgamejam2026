@@ -20,10 +20,18 @@ pub const PATH_HIT_MARGIN: f32 = 2.0;
 
 // Map
 pub const RESPAWN_MARGIN: f32 = 500.0;
+pub const SPAWN_POINTS: &[[f32; 3]] = &[
+    [-408.5, -127.0, 2414.2],
+    [-196.2, -127.0, 2417.7],
+    [-277.4, -127.0, 2204.3],
+    [299.0, 0.0, 498.4],
+    [657.3, 0.0, 412.4],
+    [-58.9, 0.0, 347.5],
+];
 
 // Targeting system
 pub const TARGETING_ANGLE: f32 = 60.0;
 pub const TARGETING_DURATION: f32 = 1.0;
 
 // Debug options
-pub const DEBUG_MANNEQUINS: bool = cfg!(debug_assertions);
+pub const DEBUG_MANNEQUINS: bool = true;

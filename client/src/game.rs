@@ -6,7 +6,7 @@ use web_time::Instant;
 use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
-use crate::map::LoadedMap;
+use crate::mesh::Mesh;
 use crate::network::{GamePhase, NetworkEvent, PeerId};
 use crate::player::{Player, RemotePlayer};
 
@@ -14,7 +14,6 @@ pub struct GameState {
     pub player: Player,
     pub remote_players: HashMap<PeerId, RemotePlayer>,
     pub physics: PhysicsWorld,
-    pub spawn_points: Vec<Vec3>,
     pub map_bounds: (Vec3, Vec3),
     pub is_dead: bool,
     pub phase: GamePhase,
@@ -27,20 +26,39 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub fn new(map: &LoadedMap, _debug_mannequins: bool) -> Self {
-        let spawn_idx = rand::rng().random_range(0..map.spawn_points.len());
-        let initial_spawn = map.spawn_points[spawn_idx];
+    pub fn new(mesh: &Mesh, debug_mannequins: bool) -> Self {
+        let spawn_idx = rand::rng().random_range(0..SPAWN_POINTS.len());
+        let initial_spawn = Self::get_spawn_point(spawn_idx);
 
         let player = Player::new(initial_spawn);
-        let physics = PhysicsWorld::new(&map.collision_vertices, &map.collision_indices)
+
+        // Extract collision data from mesh vertices
+        let (collision_vertices, collision_indices, bounds) = Self::extract_collision_data(mesh);
+        let physics = PhysicsWorld::new(&collision_vertices, &collision_indices)
             .expect("Failed to create physics world");
+
+        let mut remote_players = HashMap::new();
+        if debug_mannequins && SPAWN_POINTS.len() >= 2 {
+            // Create mannequins at different spawn points for testing
+            let mut mannequin1 = RemotePlayer::new();
+            mannequin1.position = Self::get_spawn_point((spawn_idx + 1) % SPAWN_POINTS.len());
+            remote_players.insert(u64::MAX, mannequin1);
+
+            let mut mannequin2 = RemotePlayer::new();
+            mannequin2.position = Self::get_spawn_point((spawn_idx + 2) % SPAWN_POINTS.len());
+            remote_players.insert(u64::MAX - 1, mannequin2);
+
+            log::info!(
+                "Created debug mannequins at spawn points, player at {:?}",
+                initial_spawn
+            );
+        }
 
         Self {
             player,
-            remote_players: HashMap::new(),
+            remote_players,
             physics,
-            spawn_points: map.spawn_points.clone(),
-            map_bounds: (map.bounds_min, map.bounds_max),
+            map_bounds: bounds,
             is_dead: false,
             phase: GamePhase::WaitingForPlayers,
             phase_timer: 0.0,
@@ -50,6 +68,49 @@ impl GameState {
             local_peer_id: None,
             just_died: false,
         }
+    }
+
+    fn extract_collision_data(mesh: &Mesh) -> (Vec<Vec3>, Vec<[u32; 3]>, (Vec3, Vec3)) {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        for submesh in &mesh.submeshes {
+            let base_idx = vertices.len() as u32;
+
+            // Transform already applied at load time
+            for v in &submesh.vertices {
+                vertices.push(Vec3::from_array(v.position));
+            }
+
+            // Convert to triangle indices
+            for chunk in submesh.indices.chunks(3) {
+                if chunk.len() == 3 {
+                    indices.push([
+                        base_idx + chunk[0],
+                        base_idx + chunk[1],
+                        base_idx + chunk[2],
+                    ]);
+                }
+            }
+        }
+
+        // Compute bounds
+        let (bounds_min, bounds_max) = vertices.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(min, max), v| (min.min(*v), max.max(*v)),
+        );
+
+        (vertices, indices, (bounds_min, bounds_max))
+    }
+
+    fn get_spawn_point(idx: usize) -> Vec3 {
+        let p = SPAWN_POINTS[idx];
+        Vec3::new(p[0], p[1], p[2])
+    }
+
+    fn random_spawn_point() -> Vec3 {
+        let idx = rand::rng().random_range(0..SPAWN_POINTS.len());
+        Self::get_spawn_point(idx)
     }
 
     pub fn update(&mut self, input: &mut InputState) {
@@ -64,11 +125,8 @@ impl GameState {
 
         self.update_hud_display();
 
-        // Don't process movement while dead or in victory/waiting phase
-        if self.is_dead
-            || self.phase == GamePhase::Victory
-            || self.phase == GamePhase::WaitingForPlayers
-        {
+        // Don't process movement while dead or in victory phase
+        if self.is_dead || self.phase == GamePhase::Victory {
             return;
         }
 
@@ -88,8 +146,8 @@ impl GameState {
 
         self.check_respawn();
 
-        // Only update targeting during Playing phase
-        if self.phase == GamePhase::Playing {
+        // Allow targeting during Playing phase and WaitingForPlayers (for testing mannequins)
+        if self.phase == GamePhase::Playing || self.phase == GamePhase::WaitingForPlayers {
             self.update_targeting(dt);
         }
     }
@@ -111,10 +169,7 @@ impl GameState {
     }
 
     pub fn respawn_player(&mut self) {
-        if !self.spawn_points.is_empty() {
-            let idx = rand::rng().random_range(0..self.spawn_points.len());
-            self.player.respawn(self.spawn_points[idx]);
-        }
+        self.player.respawn(Self::random_spawn_point());
     }
 
     fn update_targeting(&mut self, dt: f32) {
@@ -178,7 +233,9 @@ impl GameState {
     }
 
     pub fn get_targeting_info(&self) -> (f32, bool) {
-        if self.phase != GamePhase::Playing || self.is_dead {
+        let can_target =
+            self.phase == GamePhase::Playing || self.phase == GamePhase::WaitingForPlayers;
+        if !can_target || self.is_dead {
             return (0.0, false);
         }
 
@@ -350,7 +407,7 @@ impl GameState {
 fn show_death_overlay(killer_id: PeerId) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         if let Some(overlay) = doc.get_element_by_id("death-overlay") {
-            let _ = overlay.set_attribute("style", "display: flex;");
+            let _ = overlay.set_attribute("style", "display: block;");
         }
         if let Some(killer_elem) = doc.get_element_by_id("killer-id") {
             killer_elem.set_text_content(Some(&killer_id.to_string()));
@@ -370,7 +427,7 @@ fn show_countdown_overlay() {
     if let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(overlay) = doc.get_element_by_id("countdown-overlay")
     {
-        let _ = overlay.set_attribute("style", "display: flex;");
+        let _ = overlay.set_attribute("style", "display: block;");
     }
 }
 
@@ -394,7 +451,7 @@ fn show_waiting_overlay() {
     if let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
     {
-        let _ = overlay.set_attribute("style", "display: flex;");
+        let _ = overlay.set_attribute("style", "display: block;");
     }
 }
 
@@ -409,7 +466,7 @@ fn hide_waiting_overlay() {
 fn show_victory_overlay(winner_id: Option<PeerId>, is_local_winner: bool) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         if let Some(overlay) = doc.get_element_by_id("victory-overlay") {
-            let _ = overlay.set_attribute("style", "display: flex;");
+            let _ = overlay.set_attribute("style", "display: block;");
         }
         if let Some(title) = doc.get_element_by_id("victory-title") {
             if is_local_winner {

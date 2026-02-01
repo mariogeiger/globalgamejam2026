@@ -95,6 +95,7 @@ pub struct PostProcessor {
     pub first_frame: bool,
 }
 
+#[allow(dead_code)]
 impl PostProcessor {
     pub fn new(
         device: &wgpu::Device,
