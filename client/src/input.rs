@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use web_time::Instant;
 use winit::keyboard::KeyCode;
 
 pub struct InputState {
@@ -7,6 +8,7 @@ pub struct InputState {
     mouse_delta: (f32, f32),
     scroll_delta: f32,
     pub cursor_grabbed: bool,
+    last_activity: Instant,
 }
 
 impl InputState {
@@ -17,10 +19,12 @@ impl InputState {
             mouse_delta: (0.0, 0.0),
             scroll_delta: 0.0,
             cursor_grabbed: false,
+            last_activity: Instant::now(),
         }
     }
 
     pub fn handle_key_press(&mut self, key: KeyCode) {
+        self.last_activity = Instant::now();
         if !self.pressed_keys.contains(&key) {
             self.just_pressed_keys.insert(key);
         }
@@ -32,11 +36,13 @@ impl InputState {
     }
 
     pub fn handle_mouse_move(&mut self, dx: f32, dy: f32) {
+        self.last_activity = Instant::now();
         self.mouse_delta.0 += dx;
         self.mouse_delta.1 += dy;
     }
 
     pub fn handle_scroll(&mut self, delta: f32) {
+        self.last_activity = Instant::now();
         self.scroll_delta += delta;
     }
 
@@ -58,6 +64,10 @@ impl InputState {
 
     pub fn just_pressed(&self, key: KeyCode) -> bool {
         self.just_pressed_keys.contains(&key)
+    }
+
+    pub fn seconds_since_activity(&self) -> f32 {
+        self.last_activity.elapsed().as_secs_f32()
     }
 
     pub fn end_frame(&mut self) {

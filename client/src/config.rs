@@ -40,5 +40,8 @@ pub const HUNTER_KILL_DURATION: f32 = 0.7;
 pub const HUNTER_CONE_LENGTH: f32 = 5000.0;
 pub const HUNTER_CONE_ALPHA: f32 = 0.3;
 
+// AFK timeout
+pub const AFK_TIMEOUT_SECONDS: f32 = 600.0; // 10 minutes
+
 // Debug options
 pub const DEBUG_MANNEQUINS: bool = true;

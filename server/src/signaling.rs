@@ -50,6 +50,8 @@ enum ClientMessage {
     },
     #[serde(rename = "player_died")]
     PlayerDied,
+    #[serde(rename = "leave")]
+    Leave,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -384,6 +386,9 @@ async fn handle_message(
                     let _ = target.sender.send(json);
                 }
             }
+        }
+        ClientMessage::Leave => {
+            log::info!("Client {} requested disconnect (AFK)", client_id);
         }
     }
 }

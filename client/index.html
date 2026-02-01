@@ -137,6 +137,27 @@
             animation: pulse 1.5s ease-in-out infinite;
         }
         
+        #afk-overlay {
+            background: rgba(46, 40, 30, 0.95);
+            border: 2px solid #fab387;
+        }
+        #afk-overlay h2 {
+            font-size: 20px;
+            font-weight: bold;
+            color: #fab387;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+        #afk-overlay p {
+            font-size: 14px;
+            color: #cdd6f4;
+        }
+        #afk-overlay .hint {
+            font-size: 12px;
+            color: #a6adc8;
+            margin-top: 5px;
+        }
+        
         @keyframes pulse {
             0%, 100% { opacity: 0.5; }
             50% { opacity: 1; }
@@ -211,6 +232,12 @@
     <div id="spectating-overlay" class="game-status-box">
         <h2>SPECTATING</h2>
         <p>Game in progress. Waiting for next round...</p>
+    </div>
+    
+    <div id="afk-overlay" class="game-status-box">
+        <h2>DISCONNECTED</h2>
+        <p>You were disconnected due to inactivity.</p>
+        <p class="hint">Refresh the page to reconnect.</p>
     </div>
     
     <div id="info-panel">

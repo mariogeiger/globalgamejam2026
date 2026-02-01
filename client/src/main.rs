@@ -22,7 +22,7 @@ mod render;
 
 use assets::EMBEDDED_MAP;
 use audio::Audio;
-use config::DEBUG_MANNEQUINS;
+use config::{AFK_TIMEOUT_SECONDS, DEBUG_MANNEQUINS};
 use game::GameState;
 use glb::load_mesh_from_bytes;
 use input::InputState;
@@ -197,6 +197,15 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
+                        // Check AFK timeout
+                        if state.network.is_connected()
+                            && state.input.seconds_since_activity() > AFK_TIMEOUT_SECONDS
+                        {
+                            log::info!("Disconnecting due to inactivity");
+                            state.network.disconnect();
+                            show_afk_overlay();
+                        }
+
                         let local_peer_id = state.network.local_id();
 
                         for event in state.network.poll_events() {
@@ -254,6 +263,14 @@ use std::cell::RefCell;
 
 thread_local! {
     static STATE: RefCell<Option<ClientState>> = const { RefCell::new(None) };
+}
+
+fn show_afk_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("afk-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: block;");
+    }
 }
 
 use wasm_bindgen::prelude::*;

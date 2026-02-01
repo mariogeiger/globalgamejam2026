@@ -261,6 +261,11 @@ impl NetworkClient {
     pub fn notify_death(&self) {
         let _ = self.ws.send_with_str(r#"{"type":"player_died"}"#);
     }
+
+    pub fn disconnect(&self) {
+        let _ = self.ws.send_with_str(r#"{"type":"leave"}"#);
+        let _ = self.ws.close();
+    }
 }
 
 fn signaling_server_url() -> String {
