@@ -195,9 +195,12 @@ pub fn generate_player_box() -> (Vec<PlayerVertex>, Vec<u32>) {
 }
 
 pub struct PlayerRenderer {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    player_vertex_buffer: wgpu::Buffer,
+    player_index_buffer: wgpu::Buffer,
+    player_index_count: u32,
+    tombstone_vertex_buffer: wgpu::Buffer,
+    tombstone_index_buffer: wgpu::Buffer,
+    tombstone_index_count: u32,
     pipeline: wgpu::RenderPipeline,
     uniform_layout: wgpu::BindGroupLayout,
     uniform_pool: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
@@ -208,6 +211,8 @@ impl PlayerRenderer {
         device: &wgpu::Device,
         camera_layout: &wgpu::BindGroupLayout,
         surface_format: wgpu::TextureFormat,
+        tombstone_vertices: &[PlayerVertex],
+        tombstone_indices: &[u32],
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Player Shader"),
@@ -258,24 +263,40 @@ impl PlayerRenderer {
             cache: None,
         });
 
-        let (vertices, indices) = generate_player_box();
+        let (player_vertices, player_indices) = generate_player_box();
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let player_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Player Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
+            contents: bytemuck::cast_slice(&player_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let player_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Player Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
+            contents: bytemuck::cast_slice(&player_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let tombstone_vertex_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Tombstone Vertex Buffer"),
+                contents: bytemuck::cast_slice(tombstone_vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        let tombstone_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Tombstone Index Buffer"),
+            contents: bytemuck::cast_slice(tombstone_indices),
             usage: wgpu::BufferUsages::INDEX,
         });
 
         Self {
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
+            player_vertex_buffer,
+            player_index_buffer,
+            player_index_count: player_indices.len() as u32,
+            tombstone_vertex_buffer,
+            tombstone_index_buffer,
+            tombstone_index_count: tombstone_indices.len() as u32,
             pipeline,
             uniform_layout,
             uniform_pool: Vec::new(),
@@ -311,28 +332,58 @@ impl PlayerRenderer {
         queue: &wgpu::Queue,
         device: &wgpu::Device,
         camera_bind_group: &'a wgpu::BindGroup,
-        players: &[(Mat4, [f32; 4])],
+        alive_players: &[(Mat4, [f32; 4])],
+        dead_players: &[(Mat4, [f32; 4])],
     ) {
-        if players.is_empty() {
+        let total_count = alive_players.len() + dead_players.len();
+        if total_count == 0 {
             return;
         }
 
-        self.ensure_pool_size(device, players.len());
+        self.ensure_pool_size(device, total_count);
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-        for (i, (model, color)) in players.iter().enumerate() {
-            let uniform = PlayerUniform {
-                model: model.to_cols_array_2d(),
-                color: *color,
-            };
-            let (buffer, bind_group) = &self.uniform_pool[i];
-            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[uniform]));
-            pass.set_bind_group(1, bind_group, &[]);
-            pass.draw_indexed(0..self.index_count, 0, 0..1);
+        // Render alive players with player mesh
+        if !alive_players.is_empty() {
+            pass.set_vertex_buffer(0, self.player_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                self.player_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+
+            for (i, (model, color)) in alive_players.iter().enumerate() {
+                let uniform = PlayerUniform {
+                    model: model.to_cols_array_2d(),
+                    color: *color,
+                };
+                let (buffer, bind_group) = &self.uniform_pool[i];
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[uniform]));
+                pass.set_bind_group(1, bind_group, &[]);
+                pass.draw_indexed(0..self.player_index_count, 0, 0..1);
+            }
+        }
+
+        // Render dead players with tombstone mesh
+        if !dead_players.is_empty() {
+            pass.set_vertex_buffer(0, self.tombstone_vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                self.tombstone_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+
+            for (i, (model, color)) in dead_players.iter().enumerate() {
+                let uniform = PlayerUniform {
+                    model: model.to_cols_array_2d(),
+                    color: *color,
+                };
+                let pool_idx = alive_players.len() + i;
+                let (buffer, bind_group) = &self.uniform_pool[pool_idx];
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[uniform]));
+                pass.set_bind_group(1, bind_group, &[]);
+                pass.draw_indexed(0..self.tombstone_index_count, 0, 0..1);
+            }
         }
     }
 }

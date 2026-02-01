@@ -3,6 +3,56 @@ use gltf::image::Format;
 use std::collections::HashMap;
 
 use crate::map::{LoadedMap, MapMesh, MapVertex, TextureData};
+use crate::render::player::PlayerVertex;
+
+/// Load a simple mesh from GLB (positions + normals only, for props like tombstones)
+pub fn load_simple_mesh_from_bytes(data: &[u8]) -> Result<(Vec<PlayerVertex>, Vec<u32>), String> {
+    let (document, buffers, _) =
+        gltf::import_slice(data).map_err(|e| format!("Failed to load GLB: {}", e))?;
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for mesh in document.meshes() {
+        for primitive in mesh.primitives() {
+            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+            let Some(positions) = reader.read_positions().map(|i| i.collect::<Vec<_>>()) else {
+                continue;
+            };
+            if positions.is_empty() {
+                continue;
+            }
+
+            let normals: Vec<[f32; 3]> = reader
+                .read_normals()
+                .map(|i| i.collect())
+                .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+
+            let mesh_indices: Vec<u32> = reader
+                .read_indices()
+                .map(|i| i.into_u32().collect())
+                .unwrap_or_else(|| (0..positions.len() as u32).collect());
+
+            let base_idx = vertices.len() as u32;
+            for (pos, norm) in positions.iter().zip(&normals) {
+                vertices.push(PlayerVertex {
+                    position: [-pos[0], -pos[1], pos[2]],
+                    normal: [-norm[0], -norm[1], norm[2]],
+                });
+            }
+            indices.extend(mesh_indices.iter().map(|i| base_idx + i));
+        }
+    }
+
+    log::info!(
+        "Loaded simple mesh: {} vertices, {} indices",
+        vertices.len(),
+        indices.len()
+    );
+
+    Ok((vertices, indices))
+}
 
 pub const SPAWN_POINTS: &[[f32; 3]] = &[
     [-408.5, -127.0, 2414.2],

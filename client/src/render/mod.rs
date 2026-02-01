@@ -3,8 +3,11 @@ use std::sync::Arc;
 use winit::window::Window;
 
 use crate::game::GameState;
+use crate::glb::load_simple_mesh_from_bytes;
 use crate::gpu::{camera_bind_group_layout, create_depth_texture};
 use crate::map::LoadedMap;
+
+const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
 
 pub mod camera;
 pub mod hud;
@@ -116,7 +119,16 @@ impl Renderer {
             loaded_map,
         );
 
-        let player_renderer = PlayerRenderer::new(&ctx.device, &camera_layout, ctx.config.format);
+        let (tombstone_vertices, tombstone_indices) =
+            load_simple_mesh_from_bytes(EMBEDDED_TOMBSTONE).expect("Failed to load tombstone");
+
+        let player_renderer = PlayerRenderer::new(
+            &ctx.device,
+            &camera_layout,
+            ctx.config.format,
+            &tombstone_vertices,
+            &tombstone_indices,
+        );
 
         let postprocessor = PostProcessor::new(
             &ctx.device,
@@ -211,17 +223,18 @@ impl Renderer {
 
             self.map_renderer.render(&mut pass, &self.camera.bind_group);
 
-            let players: Vec<_> = game
+            let alive_players: Vec<_> = game
                 .remote_players
                 .values()
-                .map(|remote| {
-                    let color = if remote.is_alive {
-                        [1.0, 0.3, 0.2, 1.0] // All enemies are red
-                    } else {
-                        [0.1, 0.1, 0.1, 1.0]
-                    };
-                    (remote.model_matrix(), color)
-                })
+                .filter(|remote| remote.is_alive)
+                .map(|remote| (remote.model_matrix(), [1.0, 0.3, 0.2, 1.0_f32]))
+                .collect();
+
+            let dead_players: Vec<_> = game
+                .remote_players
+                .values()
+                .filter(|remote| !remote.is_alive)
+                .map(|remote| (remote.model_matrix(), [0.5, 0.5, 0.5, 1.0_f32]))
                 .collect();
 
             self.player_renderer.render(
@@ -229,7 +242,8 @@ impl Renderer {
                 &self.ctx.queue,
                 &self.ctx.device,
                 &self.camera.bind_group,
-                &players,
+                &alive_players,
+                &dead_players,
             );
         }
 
