@@ -2,11 +2,13 @@ use glam::Mat4;
 use std::sync::Arc;
 use winit::window::Window;
 
+use crate::config::PLAYER_HEIGHT;
 use crate::game::GameState;
 use crate::glb::load_mesh_from_bytes;
 use crate::gpu::{camera_bind_group_layout, create_depth_texture};
 use crate::mesh::Mesh;
 
+const EMBEDDED_PLAYER: &[u8] = include_bytes!("../../assets/player.glb");
 const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
 
 pub mod camera;
@@ -119,25 +121,23 @@ impl Renderer {
             map_mesh,
         );
 
-        // Load tombstone without coordinate transform (raw GLB)
-        let tombstone_mesh =
-            load_mesh_from_bytes(EMBEDDED_TOMBSTONE, None).expect("Failed to load tombstone");
+        // Load player model and scale to PLAYER_HEIGHT
+        let mut player_mesh =
+            load_mesh_from_bytes(EMBEDDED_PLAYER, None).expect("Failed to load player");
+        player_mesh.rescale(PLAYER_HEIGHT / player_mesh.bounding_box().height());
 
-        // Get first submesh for tombstone (simple prop)
-        let tombstone_submesh = tombstone_mesh
-            .submeshes
-            .first()
-            .expect("Tombstone has no mesh");
-        let tombstone_texture = tombstone_mesh.textures.values().next();
+        // Load tombstone model and scale up 100x
+        let mut tombstone_mesh =
+            load_mesh_from_bytes(EMBEDDED_TOMBSTONE, None).expect("Failed to load tombstone");
+        tombstone_mesh.rescale(100.0);
 
         let player_renderer = PlayerRenderer::new(
             &ctx.device,
             &ctx.queue,
             &camera_layout,
             ctx.config.format,
-            &tombstone_submesh.vertices,
-            &tombstone_submesh.indices,
-            tombstone_texture,
+            &player_mesh,
+            &tombstone_mesh,
         );
 
         let postprocessor = PostProcessor::new(
@@ -237,19 +237,14 @@ impl Renderer {
                 .remote_players
                 .values()
                 .filter(|remote| remote.is_alive)
-                .map(|remote| (remote.model_matrix(), [1.0, 0.3, 0.2, 1.0_f32]))
+                .map(|remote| (remote.model_matrix(), [1.0, 1.0, 1.0, 1.0_f32]))
                 .collect();
 
             let dead_players: Vec<_> = game
                 .remote_players
                 .values()
                 .filter(|remote| !remote.is_alive)
-                .map(|remote| {
-                    (
-                        remote.model_matrix() * Mat4::from_scale(glam::Vec3::splat(100.0)),
-                        [1.0, 1.0, 1.0, 1.0_f32], // White to show texture's true colors
-                    )
-                })
+                .map(|remote| (remote.model_matrix(), [1.0, 1.0, 1.0, 1.0_f32]))
                 .collect();
 
             self.player_renderer.render(

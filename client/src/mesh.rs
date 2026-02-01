@@ -45,3 +45,47 @@ pub struct Mesh {
     pub submeshes: Vec<SubMesh>,
     pub textures: HashMap<String, TextureData>,
 }
+
+/// Axis-aligned bounding box
+#[derive(Clone, Copy, Debug)]
+pub struct BoundingBox {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl BoundingBox {
+    /// Height (Y axis)
+    pub fn height(&self) -> f32 {
+        self.max[1] - self.min[1]
+    }
+}
+
+impl Mesh {
+    /// Calculate the axis-aligned bounding box of all vertices
+    pub fn bounding_box(&self) -> BoundingBox {
+        let mut min = [f32::MAX; 3];
+        let mut max = [f32::MIN; 3];
+
+        for submesh in &self.submeshes {
+            for v in &submesh.vertices {
+                for i in 0..3 {
+                    min[i] = min[i].min(v.position[i]);
+                    max[i] = max[i].max(v.position[i]);
+                }
+            }
+        }
+
+        BoundingBox { min, max }
+    }
+
+    /// Uniformly rescale all vertex positions by the given factor
+    pub fn rescale(&mut self, factor: f32) {
+        for submesh in &mut self.submeshes {
+            for v in &mut submesh.vertices {
+                v.position[0] *= factor;
+                v.position[1] *= factor;
+                v.position[2] *= factor;
+            }
+        }
+    }
+}
