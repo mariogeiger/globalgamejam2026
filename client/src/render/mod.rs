@@ -373,14 +373,16 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            let (targeting_progress, has_target) = game.get_targeting_info();
-            self.hud_renderer.render(
-                &mut pass,
-                &self.ctx.queue,
-                projection,
-                targeting_progress,
-                has_target,
-            );
+            if game.player.mask != MaskType::Coward {
+                let (targeting_progress, has_target) = game.get_targeting_info();
+                self.hud_renderer.render(
+                    &mut pass,
+                    &self.ctx.queue,
+                    projection,
+                    targeting_progress,
+                    has_target,
+                );
+            }
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
