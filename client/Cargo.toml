@@ -35,5 +35,6 @@ web-sys = { version = "0.3.85", features = [
     "RtcIceGatheringState", "MessageEvent",
     "HtmlTextAreaElement", "HtmlButtonElement", "HtmlElement",
     "WebSocket", "BinaryType", "CloseEvent", "ErrorEvent",
-    "RtcIceServer", "MouseEvent", "PointerEvent", "console"
+    "RtcIceServer", "MouseEvent", "PointerEvent", "console",
+    "HtmlAudioElement", "Blob", "BlobPropertyBag"
 ] }

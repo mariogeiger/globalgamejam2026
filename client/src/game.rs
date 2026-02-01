@@ -22,6 +22,7 @@ pub struct GameState {
     pub winner_id: Option<PeerId>,
     last_update: Instant,
     pending_kills: Vec<PeerId>,
+    pending_death_sounds: u32,
     local_peer_id: Option<PeerId>,
     just_died: bool,
     pub time: f32,
@@ -70,6 +71,7 @@ impl GameState {
             winner_id: None,
             last_update: Instant::now(),
             pending_kills: Vec::new(),
+            pending_death_sounds: 0,
             local_peer_id: None,
             just_died: false,
             time: 0.0,
@@ -261,6 +263,7 @@ impl GameState {
                         remote.is_alive = false;
                         remote.targeted_time = 0.0;
                         new_kills.push(peer_id);
+                        self.pending_death_sounds += 1;
                         log::info!("Killed enemy {}!", peer_id);
                     }
                 } else {
@@ -278,6 +281,11 @@ impl GameState {
     /// Take pending kills to be sent over network
     pub fn take_pending_kills(&mut self) -> Vec<PeerId> {
         std::mem::take(&mut self.pending_kills)
+    }
+
+    /// Take count of deaths that need sound effects
+    pub fn take_death_sounds(&mut self) -> u32 {
+        std::mem::take(&mut self.pending_death_sounds)
     }
 
     /// Check if local player just died (needs to notify server)
@@ -402,11 +410,15 @@ impl GameState {
                 {
                     self.is_dead = true;
                     self.just_died = true;
+                    self.pending_death_sounds += 1;
                     show_death_overlay(killer_id);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
-                    // Another player was killed
+                    // Another player was killed (not by us - our kills already triggered sound)
                     remote.is_alive = false;
                     remote.targeted_time = 0.0;
+                    if local_peer_id != Some(killer_id) {
+                        self.pending_death_sounds += 1;
+                    }
                 }
             }
         }
