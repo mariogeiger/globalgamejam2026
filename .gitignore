@@ -2,3 +2,4 @@ target
 dist
 server/node_modules
 server/package-lock.json
+*.blend*
