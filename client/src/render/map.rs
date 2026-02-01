@@ -4,7 +4,7 @@ use crate::gpu::{
     create_index_buffer, create_placeholder_bind_group, create_texture_with_bind_group,
     create_vertex_buffer, texture_bind_group_layout,
 };
-use crate::map::{LoadedMap, MapVertex};
+use crate::mesh::{Mesh, Vertex};
 
 use super::traits::Renderable;
 
@@ -26,7 +26,7 @@ impl MapRenderer {
         queue: &wgpu::Queue,
         camera_layout: &wgpu::BindGroupLayout,
         surface_format: wgpu::TextureFormat,
-        map: &LoadedMap,
+        mesh: &Mesh,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Map Shader"),
@@ -47,7 +47,7 @@ impl MapRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[MapVertex::desc()],
+                buffers: &[Vertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -88,7 +88,7 @@ impl MapRenderer {
         });
 
         let mut gpu_textures: HashMap<String, wgpu::BindGroup> = HashMap::new();
-        for (name, tex_data) in &map.textures {
+        for (name, tex_data) in &mesh.textures {
             let (_, _, bg) = create_texture_with_bind_group(
                 device,
                 queue,
@@ -104,16 +104,20 @@ impl MapRenderer {
 
         let placeholder = create_placeholder_bind_group(device, queue, &texture_layout, &sampler);
 
-        let meshes: Vec<_> = map
-            .meshes
+        let meshes: Vec<_> = mesh
+            .submeshes
             .iter()
-            .filter(|m| !m.vertices.is_empty() && !m.indices.is_empty())
-            .map(|mesh| MapRenderData {
-                vertex_buffer: create_vertex_buffer(device, &mesh.vertices, &mesh.texture_name),
-                index_buffer: create_index_buffer(device, &mesh.indices, &mesh.texture_name),
-                index_count: mesh.indices.len() as u32,
+            .filter(|s| !s.vertices.is_empty() && !s.indices.is_empty())
+            .map(|submesh| MapRenderData {
+                vertex_buffer: create_vertex_buffer(
+                    device,
+                    &submesh.vertices,
+                    &submesh.texture_name,
+                ),
+                index_buffer: create_index_buffer(device, &submesh.indices, &submesh.texture_name),
+                index_count: submesh.indices.len() as u32,
                 bind_group: gpu_textures
-                    .get(&mesh.texture_name)
+                    .get(&submesh.texture_name)
                     .cloned()
                     .unwrap_or_else(|| placeholder.clone()),
             })

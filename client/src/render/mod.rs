@@ -3,9 +3,9 @@ use std::sync::Arc;
 use winit::window::Window;
 
 use crate::game::GameState;
-use crate::glb::load_simple_mesh_from_bytes;
+use crate::glb::load_mesh_from_bytes;
 use crate::gpu::{camera_bind_group_layout, create_depth_texture};
-use crate::map::LoadedMap;
+use crate::mesh::Mesh;
 
 const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
 
@@ -102,7 +102,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, loaded_map: &LoadedMap) -> Self {
+    pub async fn new(window: Arc<Window>, map_mesh: &Mesh) -> Self {
         let ctx = RenderContext::new(window).await;
 
         let camera_layout = camera_bind_group_layout(&ctx.device);
@@ -116,18 +116,28 @@ impl Renderer {
             &ctx.queue,
             &camera_layout,
             ctx.config.format,
-            loaded_map,
+            map_mesh,
         );
 
-        let (tombstone_vertices, tombstone_indices) =
-            load_simple_mesh_from_bytes(EMBEDDED_TOMBSTONE).expect("Failed to load tombstone");
+        // Load tombstone without coordinate transform (raw GLB)
+        let tombstone_mesh =
+            load_mesh_from_bytes(EMBEDDED_TOMBSTONE, None).expect("Failed to load tombstone");
+
+        // Get first submesh for tombstone (simple prop)
+        let tombstone_submesh = tombstone_mesh
+            .submeshes
+            .first()
+            .expect("Tombstone has no mesh");
+        let tombstone_texture = tombstone_mesh.textures.values().next();
 
         let player_renderer = PlayerRenderer::new(
             &ctx.device,
+            &ctx.queue,
             &camera_layout,
             ctx.config.format,
-            &tombstone_vertices,
-            &tombstone_indices,
+            &tombstone_submesh.vertices,
+            &tombstone_submesh.indices,
+            tombstone_texture,
         );
 
         let postprocessor = PostProcessor::new(
@@ -234,7 +244,12 @@ impl Renderer {
                 .remote_players
                 .values()
                 .filter(|remote| !remote.is_alive)
-                .map(|remote| (remote.model_matrix(), [0.5, 0.5, 0.5, 1.0_f32]))
+                .map(|remote| {
+                    (
+                        remote.model_matrix() * Mat4::from_scale(glam::Vec3::splat(100.0)),
+                        [1.0, 1.0, 1.0, 1.0_f32], // White to show texture's true colors
+                    )
+                })
                 .collect();
 
             self.player_renderer.render(

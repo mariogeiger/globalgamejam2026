@@ -84,106 +84,110 @@
         #coordinates .value {
             color: #a6e3a1;
         }
-        .overlay {
+        
+        /* Game status box - top center */
+        .game-status-box {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 2000;
-        }
-        #death-overlay {
-            background: rgba(139, 0, 0, 0.7);
-        }
-        #countdown-overlay {
-            background: transparent;
-            pointer-events: none;
-        }
-        #victory-overlay {
-            background: rgba(30, 60, 30, 0.85);
-            pointer-events: none;
-        }
-        #waiting-overlay {
-            background: rgba(30, 30, 46, 0.85);
-            pointer-events: none;
-        }
-        .overlay-content {
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px 30px;
+            border-radius: 12px;
             text-align: center;
-            color: #fff;
-            text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
+            z-index: 2000;
+            pointer-events: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            display: none;
         }
-        .death-message h2 {
-            font-size: 72px;
+        
+        #waiting-overlay {
+            background: rgba(30, 30, 46, 0.95);
+            border: 2px solid #f9e2af;
+        }
+        #waiting-overlay h2 {
+            font-size: 20px;
             font-weight: bold;
-            margin-bottom: 20px;
-            letter-spacing: 8px;
-        }
-        .death-message p {
-            font-size: 24px;
-            margin: 10px 0;
-        }
-        .countdown-content h2 {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 8px;
             color: #f9e2af;
             letter-spacing: 2px;
-            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+            margin-bottom: 8px;
         }
-        .countdown-content .timer {
-            font-size: 72px;
+        #waiting-overlay p {
+            font-size: 14px;
+            color: #a6adc8;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        #countdown-overlay {
+            background: rgba(30, 30, 46, 0.95);
+            border: 2px solid #89b4fa;
+        }
+        #countdown-overlay h2 {
+            font-size: 16px;
+            font-weight: bold;
+            color: #f9e2af;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+        }
+        #countdown-overlay .timer {
+            font-size: 48px;
             font-weight: bold;
             color: #89b4fa;
-            text-shadow: 0 0 20px rgba(137, 180, 250, 0.5), 0 2px 8px rgba(0,0,0,0.8);
+            text-shadow: 0 0 15px rgba(137, 180, 250, 0.5);
         }
-        .countdown-content .hint {
+        #countdown-overlay .hint {
+            font-size: 12px;
+            color: #a6adc8;
+            margin-top: 5px;
+        }
+        
+        #death-overlay {
+            background: rgba(139, 30, 30, 0.95);
+            border: 2px solid #f38ba8;
+        }
+        #death-overlay h2 {
+            font-size: 28px;
+            font-weight: bold;
+            color: #f38ba8;
+            letter-spacing: 4px;
+            margin-bottom: 8px;
+        }
+        #death-overlay p {
             font-size: 14px;
             color: #cdd6f4;
-            margin-top: 12px;
-            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
         }
-        .waiting-content h2 {
-            font-size: 36px;
+        
+        #victory-overlay {
+            background: rgba(30, 60, 30, 0.95);
+            border: 2px solid #a6e3a1;
+        }
+        #victory-overlay h2 {
+            font-size: 28px;
             font-weight: bold;
-            color: #f9e2af;
-            letter-spacing: 2px;
-            margin-bottom: 15px;
+            letter-spacing: 4px;
+            margin-bottom: 8px;
         }
-        .waiting-content p {
-            font-size: 18px;
-            color: #a6adc8;
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-        .victory-content h2 {
-            font-size: 72px;
-            font-weight: bold;
-            margin-bottom: 20px;
-            letter-spacing: 8px;
-        }
-        .victory-content.win h2 {
+        #victory-overlay.win h2 {
             color: #a6e3a1;
         }
-        .victory-content.lose h2 {
+        #victory-overlay.lose h2 {
             color: #f38ba8;
         }
-        .victory-content p {
-            font-size: 28px;
-            margin: 10px 0;
+        #victory-overlay p {
+            font-size: 14px;
             color: #cdd6f4;
         }
-        .victory-content .restart-hint {
-            font-size: 18px;
+        #victory-overlay .restart-hint {
+            font-size: 12px;
             color: #a6adc8;
-            margin-top: 30px;
+            margin-top: 10px;
             animation: pulse 1.5s ease-in-out infinite;
         }
+        
         @keyframes pulse {
             0%, 100% { opacity: 0.5; }
             50% { opacity: 1; }
         }
+        
         #player-info {
             position: fixed;
             bottom: 10px;
@@ -210,34 +214,26 @@
 <body>
     <div id="wasm-container"></div>
     
-    <div id="waiting-overlay" class="overlay" style="display: flex;">
-        <div class="overlay-content waiting-content">
-            <h2>WAITING FOR PLAYERS</h2>
-            <p>Need at least 2 players to start...</p>
-        </div>
+    <div id="waiting-overlay" class="game-status-box" style="display: block;">
+        <h2>WAITING FOR PLAYERS</h2>
+        <p>Need at least 2 players to start...</p>
     </div>
     
-    <div id="countdown-overlay" class="overlay">
-        <div class="overlay-content countdown-content">
-            <h2>GRACE PERIOD</h2>
-            <div class="timer" id="countdown-timer">10</div>
-            <p class="hint">Spread out! No damage during grace period.</p>
-        </div>
+    <div id="countdown-overlay" class="game-status-box">
+        <h2>GRACE PERIOD</h2>
+        <div class="timer" id="countdown-timer">10</div>
+        <p class="hint">Spread out! No damage during grace period.</p>
     </div>
     
-    <div id="death-overlay" class="overlay">
-        <div class="overlay-content death-message">
-            <h2>YOU DIED</h2>
-            <p>Killed by Player <span id="killer-id">0</span></p>
-        </div>
+    <div id="death-overlay" class="game-status-box">
+        <h2>YOU DIED</h2>
+        <p>Killed by Player <span id="killer-id">0</span></p>
     </div>
     
-    <div id="victory-overlay" class="overlay">
-        <div class="overlay-content victory-content" id="victory-content">
-            <h2 id="victory-title">VICTORY!</h2>
-            <p id="winner-id">You are the last one standing!</p>
-            <p class="restart-hint">Restarting...</p>
-        </div>
+    <div id="victory-overlay" class="game-status-box">
+        <h2 id="victory-title">VICTORY!</h2>
+        <p id="winner-id">You are the last one standing!</p>
+        <p class="restart-hint">Restarting...</p>
     </div>
     
     <div id="connection-status">Connecting to server...</div>

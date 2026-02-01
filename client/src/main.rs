@@ -13,16 +13,16 @@ mod game;
 mod glb;
 mod gpu;
 mod input;
-mod map;
+mod mesh;
 mod network;
 mod player;
 mod render;
 
 use config::DEBUG_MANNEQUINS;
 use game::GameState;
-use glb::load_glb_from_bytes;
+use glb::load_mesh_from_bytes;
 use input::InputState;
-use map::LoadedMap;
+use mesh::Mesh;
 use network::NetworkClient;
 use render::Renderer;
 
@@ -37,20 +37,22 @@ struct ClientState {
 
 struct App {
     state: Option<ClientState>,
-    loaded_map: Option<LoadedMap>,
+    map_mesh: Option<Mesh>,
 }
 
 impl App {
     fn new() -> Self {
-        let loaded_map = load_glb_from_bytes(EMBEDDED_MAP).expect("Failed to load map");
+        // Load map with coordinate transform (rotate 180° around Z)
+        let map_mesh = load_mesh_from_bytes(EMBEDDED_MAP, Some(|p| [-p[0], -p[1], p[2]]))
+            .expect("Failed to load map");
         log::info!(
-            "Loaded GLB: {} meshes, {} textures",
-            loaded_map.meshes.len(),
-            loaded_map.textures.len()
+            "Loaded map: {} submeshes, {} textures",
+            map_mesh.submeshes.len(),
+            map_mesh.textures.len()
         );
         Self {
             state: None,
-            loaded_map: Some(loaded_map),
+            map_mesh: Some(map_mesh),
         }
     }
 }
@@ -91,12 +93,12 @@ impl ApplicationHandler for App {
             })
             .expect("Couldn't append canvas");
 
-        let loaded_map = self.loaded_map.take().expect("Map already consumed");
+        let map_mesh = self.map_mesh.take().expect("Map already consumed");
         let window_clone = window.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            let renderer = Renderer::new(window_clone.clone(), &loaded_map).await;
-            let game = GameState::new(&loaded_map, DEBUG_MANNEQUINS);
+            let renderer = Renderer::new(window_clone.clone(), &map_mesh).await;
+            let game = GameState::new(&map_mesh, DEBUG_MANNEQUINS);
             let input = InputState::new();
             let network = NetworkClient::new().expect("Failed to create network client");
 
