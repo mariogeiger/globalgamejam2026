@@ -191,6 +191,11 @@ impl ApplicationHandler for App {
                             state.network.send_kill(victim_id);
                         }
 
+                        // Notify server if we just died
+                        if state.game.take_death_notification() {
+                            state.network.notify_death();
+                        }
+
                         if state.network.is_connected() && !state.game.is_dead {
                             state.network.send_player_state(
                                 state.game.player.position,

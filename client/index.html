@@ -106,6 +106,10 @@
             background: rgba(30, 60, 30, 0.85);
             pointer-events: none;
         }
+        #waiting-overlay {
+            background: rgba(30, 30, 46, 0.85);
+            pointer-events: none;
+        }
         .overlay-content {
             text-align: center;
             color: #fff;
@@ -140,6 +144,18 @@
             color: #cdd6f4;
             margin-top: 12px;
             text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        }
+        .waiting-content h2 {
+            font-size: 36px;
+            font-weight: bold;
+            color: #f9e2af;
+            letter-spacing: 2px;
+            margin-bottom: 15px;
+        }
+        .waiting-content p {
+            font-size: 18px;
+            color: #a6adc8;
+            animation: pulse 1.5s ease-in-out infinite;
         }
         .victory-content h2 {
             font-size: 72px;
@@ -194,11 +210,18 @@
 <body>
     <div id="wasm-container"></div>
     
-    <div id="countdown-overlay" class="overlay" style="display: flex;">
+    <div id="waiting-overlay" class="overlay" style="display: flex;">
+        <div class="overlay-content waiting-content">
+            <h2>WAITING FOR PLAYERS</h2>
+            <p>Need at least 2 players to start...</p>
+        </div>
+    </div>
+    
+    <div id="countdown-overlay" class="overlay">
         <div class="overlay-content countdown-content">
-            <h2>GET READY</h2>
+            <h2>GRACE PERIOD</h2>
             <div class="timer" id="countdown-timer">10</div>
-            <p class="hint">Spread out! No damage during countdown.</p>
+            <p class="hint">Spread out! No damage during grace period.</p>
         </div>
     </div>
     

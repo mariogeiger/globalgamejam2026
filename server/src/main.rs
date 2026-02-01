@@ -23,6 +23,9 @@ async fn main() {
         }
     });
 
+    // Start game loop
+    signaling::start_game_loop();
+
     // Build router with WebSocket and static file serving
     let app = Router::new()
         .route("/ws", get(signaling::ws_handler))

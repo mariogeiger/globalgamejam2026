@@ -7,15 +7,8 @@ use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
 use crate::map::LoadedMap;
-use crate::network::{NetworkEvent, PeerId};
+use crate::network::{GamePhase, NetworkEvent, PeerId};
 use crate::player::{Player, RemotePlayer};
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GamePhase {
-    Countdown,
-    Playing,
-    Victory,
-}
 
 pub struct GameState {
     pub player: Player,
@@ -30,6 +23,7 @@ pub struct GameState {
     last_update: Instant,
     pending_kills: Vec<PeerId>,
     local_peer_id: Option<PeerId>,
+    just_died: bool,
 }
 
 impl GameState {
@@ -48,12 +42,13 @@ impl GameState {
             spawn_points: map.spawn_points.clone(),
             map_bounds: (map.bounds_min, map.bounds_max),
             is_dead: false,
-            phase: GamePhase::Countdown,
-            phase_timer: COUNTDOWN_DURATION,
+            phase: GamePhase::WaitingForPlayers,
+            phase_timer: 0.0,
             winner_id: None,
             last_update: Instant::now(),
             pending_kills: Vec::new(),
             local_peer_id: None,
+            just_died: false,
         }
     }
 
@@ -62,11 +57,18 @@ impl GameState {
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
 
-        self.update_phase(dt);
+        // Update local phase timer for display
+        if self.phase_timer > 0.0 {
+            self.phase_timer = (self.phase_timer - dt).max(0.0);
+        }
+
         self.update_hud_display();
 
-        // Don't process movement while dead or in victory phase
-        if self.is_dead || self.phase == GamePhase::Victory {
+        // Don't process movement while dead or in victory/waiting phase
+        if self.is_dead
+            || self.phase == GamePhase::Victory
+            || self.phase == GamePhase::WaitingForPlayers
+        {
             return;
         }
 
@@ -90,87 +92,6 @@ impl GameState {
         if self.phase == GamePhase::Playing {
             self.update_targeting(dt);
         }
-    }
-
-    fn update_phase(&mut self, dt: f32) {
-        match self.phase {
-            GamePhase::Countdown => {
-                self.phase_timer -= dt;
-                if self.phase_timer <= 0.0 {
-                    self.phase = GamePhase::Playing;
-                    self.phase_timer = 0.0;
-                    log::info!("Game started! Fight!");
-                    hide_countdown_overlay();
-                }
-                update_countdown_display(self.phase_timer.ceil() as u32);
-            }
-            GamePhase::Playing => {
-                self.check_victory();
-            }
-            GamePhase::Victory => {
-                self.phase_timer -= dt;
-                if self.phase_timer <= 0.0 {
-                    self.restart_game();
-                }
-            }
-        }
-    }
-
-    fn check_victory(&mut self) {
-        // Count alive players (including self)
-        let alive_count = if self.is_dead { 0 } else { 1 }
-            + self.remote_players.values().filter(|p| p.is_alive).count();
-
-        // Need at least 2 players to have a winner
-        let total_players = 1 + self.remote_players.len();
-        if total_players < 2 {
-            return;
-        }
-
-        if alive_count <= 1 {
-            // Find the winner
-            if !self.is_dead {
-                self.winner_id = self.local_peer_id;
-            } else {
-                self.winner_id = self
-                    .remote_players
-                    .iter()
-                    .find(|(_, p)| p.is_alive)
-                    .map(|(&id, _)| id);
-            }
-
-            self.phase = GamePhase::Victory;
-            self.phase_timer = VICTORY_DURATION;
-
-            let is_local_winner =
-                self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
-            show_victory_overlay(self.winner_id, is_local_winner);
-            log::info!("Victory! Winner: {:?}", self.winner_id);
-        }
-    }
-
-    fn restart_game(&mut self) {
-        log::info!("Restarting game...");
-
-        // Reset local player
-        self.is_dead = false;
-        self.respawn_player();
-
-        // Reset all remote players
-        for remote in self.remote_players.values_mut() {
-            remote.is_alive = true;
-            remote.targeted_time = 0.0;
-        }
-
-        // Reset phase
-        self.phase = GamePhase::Countdown;
-        self.phase_timer = COUNTDOWN_DURATION;
-        self.winner_id = None;
-        self.pending_kills.clear();
-
-        hide_victory_overlay();
-        hide_death_overlay();
-        show_countdown_overlay();
     }
 
     fn check_respawn(&mut self) {
@@ -246,6 +167,16 @@ impl GameState {
         std::mem::take(&mut self.pending_kills)
     }
 
+    /// Check if local player just died (needs to notify server)
+    pub fn take_death_notification(&mut self) -> bool {
+        if self.just_died {
+            self.just_died = false;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get_targeting_info(&self) -> (f32, bool) {
         if self.phase != GamePhase::Playing || self.is_dead {
             return (0.0, false);
@@ -269,9 +200,19 @@ impl GameState {
 
     pub fn handle_network_event(&mut self, event: NetworkEvent, local_peer_id: Option<PeerId>) {
         match event {
-            NetworkEvent::Connected { id } => {
-                log::info!("Connected with ID: {}", id);
+            NetworkEvent::Connected {
+                id,
+                phase,
+                phase_time_remaining,
+            } => {
+                log::info!(
+                    "Connected with ID: {}, phase: {:?}, time: {}",
+                    id,
+                    phase,
+                    phase_time_remaining
+                );
                 self.local_peer_id = Some(id);
+                self.set_phase(phase, phase_time_remaining);
                 self.update_player_count_display();
             }
             NetworkEvent::PeerJoined { id } => {
@@ -284,6 +225,17 @@ impl GameState {
                 log::info!("Peer {} left", id);
                 self.remote_players.remove(&id);
                 self.update_player_count_display();
+            }
+            NetworkEvent::GamePhaseChanged {
+                phase,
+                time_remaining,
+            } => {
+                log::info!(
+                    "Game phase changed to {:?}, time: {}",
+                    phase,
+                    time_remaining
+                );
+                self.set_phase(phase, time_remaining);
             }
             NetworkEvent::PlayerState { id, position, yaw } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
@@ -302,6 +254,7 @@ impl GameState {
                     && victim_id == local_id
                 {
                     self.is_dead = true;
+                    self.just_died = true;
                     show_death_overlay(killer_id);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
                     // Another player was killed
@@ -312,12 +265,72 @@ impl GameState {
         }
     }
 
+    fn set_phase(&mut self, phase: GamePhase, time_remaining: f32) {
+        let old_phase = self.phase;
+        self.phase = phase;
+        self.phase_timer = time_remaining;
+
+        match phase {
+            GamePhase::WaitingForPlayers => {
+                hide_countdown_overlay();
+                hide_victory_overlay();
+                show_waiting_overlay();
+            }
+            GamePhase::GracePeriod => {
+                // New round starting - reset state
+                if old_phase != GamePhase::GracePeriod {
+                    self.is_dead = false;
+                    self.winner_id = None;
+                    self.pending_kills.clear();
+                    self.respawn_player();
+
+                    // Reset all remote players
+                    for remote in self.remote_players.values_mut() {
+                        remote.is_alive = true;
+                        remote.targeted_time = 0.0;
+                    }
+
+                    hide_death_overlay();
+                    hide_victory_overlay();
+                }
+                hide_waiting_overlay();
+                show_countdown_overlay();
+                update_countdown_display(time_remaining.ceil() as u32);
+            }
+            GamePhase::Playing => {
+                hide_countdown_overlay();
+                hide_waiting_overlay();
+            }
+            GamePhase::Victory => {
+                // Determine winner
+                if !self.is_dead {
+                    self.winner_id = self.local_peer_id;
+                } else {
+                    self.winner_id = self
+                        .remote_players
+                        .iter()
+                        .find(|(_, p)| p.is_alive)
+                        .map(|(&id, _)| id);
+                }
+
+                let is_local_winner =
+                    self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
+                show_victory_overlay(self.winner_id, is_local_winner);
+            }
+        }
+    }
+
     fn update_hud_display(&self) {
         let pos = self.player.position;
         if let Some(doc) = web_sys::window().and_then(|w| w.document())
             && let Some(e) = doc.get_element_by_id("local-pos")
         {
             e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
+        }
+
+        // Update countdown timer during grace period
+        if self.phase == GamePhase::GracePeriod {
+            update_countdown_display(self.phase_timer.ceil() as u32);
         }
     }
 
@@ -374,6 +387,22 @@ fn update_countdown_display(seconds: u32) {
         && let Some(e) = doc.get_element_by_id("countdown-timer")
     {
         e.set_text_content(Some(&seconds.to_string()));
+    }
+}
+
+fn show_waiting_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: flex;");
+    }
+}
+
+fn hide_waiting_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
     }
 }
 
