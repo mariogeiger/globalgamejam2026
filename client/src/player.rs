@@ -160,7 +160,7 @@ impl RemotePlayer {
     }
 
     pub fn model_matrix(&self) -> Mat4 {
-        Mat4::from_translation(self.position) * Mat4::from_rotation_y(self.yaw)
+        Mat4::from_translation(self.position) * Mat4::from_rotation_y(-self.yaw)
     }
 
     pub fn center_mass(&self) -> Vec3 {
