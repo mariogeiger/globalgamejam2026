@@ -93,9 +93,8 @@ impl Player {
         self.yaw += dx * MOUSE_SENSITIVITY;
         self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY).clamp(-1.5, 1.5);
 
-        let (sin, cos) = (self.yaw.sin(), self.yaw.cos());
-        let forward = Vec3::new(sin, 0.0, -cos);
-        let right = Vec3::new(cos, 0.0, sin);
+        let forward = self.forward_direction();
+        let right = self.right_direction();
 
         let mut move_dir = Vec3::ZERO;
         if input.is_pressed(KeyCode::KeyW) {
@@ -143,7 +142,7 @@ impl Player {
 
         // 3D movement in look direction
         let look_dir = self.look_direction();
-        let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin());
+        let right = self.right_direction();
 
         let mut move_dir = Vec3::ZERO;
         if input.is_pressed(KeyCode::KeyW) {
@@ -172,13 +171,8 @@ impl Player {
     }
 
     pub fn view_matrix(&self) -> Mat4 {
-        let eye = self.position + Vec3::new(0.0, EYE_HEIGHT, 0.0);
-        let look_dir = Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            -self.yaw.cos() * self.pitch.cos(),
-        )
-        .normalize();
+        let eye = self.eye_position();
+        let look_dir = self.look_direction();
         Mat4::look_at_rh(eye, eye + look_dir, Vec3::Y)
     }
 
@@ -200,18 +194,44 @@ impl Player {
         self.on_ground = false;
     }
 
+    /// 3D look direction based on yaw and pitch
     pub fn look_direction(&self) -> Vec3 {
-        Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            -self.yaw.cos() * self.pitch.cos(),
-        )
-        .normalize()
+        look_direction_from_angles(self.yaw, self.pitch)
+    }
+
+    /// Horizontal forward direction (for movement), ignores pitch
+    pub fn forward_direction(&self) -> Vec3 {
+        forward_direction_from_yaw(self.yaw)
+    }
+
+    /// Horizontal right direction (for movement)
+    pub fn right_direction(&self) -> Vec3 {
+        right_direction_from_yaw(self.yaw)
     }
 
     pub fn eye_position(&self) -> Vec3 {
         self.position + Vec3::new(0.0, EYE_HEIGHT, 0.0)
     }
+}
+
+/// Centralized direction calculations from yaw/pitch angles.
+/// Yaw: 0 = looking towards -Z, increases clockwise (looking down from above).
+/// Pitch: 0 = horizontal, positive = looking up, negative = looking down.
+pub fn look_direction_from_angles(yaw: f32, pitch: f32) -> Vec3 {
+    Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    )
+    .normalize()
+}
+
+pub fn forward_direction_from_yaw(yaw: f32) -> Vec3 {
+    Vec3::new(yaw.sin(), 0.0, -yaw.cos())
+}
+
+pub fn right_direction_from_yaw(yaw: f32) -> Vec3 {
+    Vec3::new(yaw.cos(), 0.0, yaw.sin())
 }
 
 pub struct RemotePlayer {
@@ -222,6 +242,8 @@ pub struct RemotePlayer {
     pub targeted_time: f32,
     pub mask: MaskType,
     pub velocity: Vec3,
+    pub name: Option<String>,
+    pub kills: u32,
     prev_position: Vec3,
 }
 
@@ -235,6 +257,8 @@ impl RemotePlayer {
             targeted_time: 0.0,
             mask: MaskType::Ghost,
             velocity: Vec3::ZERO,
+            name: None,
+            kills: 0,
             prev_position: Vec3::ZERO,
         }
     }

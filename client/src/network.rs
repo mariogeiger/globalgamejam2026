@@ -51,6 +51,10 @@ pub enum NetworkEvent {
         killer_id: PeerId,
         victim_id: PeerId,
     },
+    PeerIntroduction {
+        id: PeerId,
+        name: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -86,6 +90,8 @@ impl PlayerStateMessage {
 enum EventMessage {
     #[serde(rename = "kill")]
     Kill { victim_id: PeerId },
+    #[serde(rename = "introduction")]
+    Introduction { name: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -166,6 +172,7 @@ struct IceCandidateData {
 #[derive(Default)]
 struct RtcState {
     local_id: Option<PeerId>,
+    local_name: String,
     peers: HashMap<PeerId, PeerConnection>,
     pending_events: Vec<NetworkEvent>,
 }
@@ -178,8 +185,11 @@ pub struct NetworkClient {
 }
 
 impl NetworkClient {
-    pub fn new() -> Result<Self, JsValue> {
-        let state: StateRef = Rc::new(RefCell::new(RtcState::default()));
+    pub fn new(player_name: String) -> Result<Self, JsValue> {
+        let state: StateRef = Rc::new(RefCell::new(RtcState {
+            local_name: player_name,
+            ..Default::default()
+        }));
         let server_url = signaling_server_url();
         log::info!("Connecting to signaling server: {}", server_url);
         let ws = WebSocket::new(&server_url)?;
@@ -639,10 +649,18 @@ fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
     onmsg.forget();
 }
 
-/// Set up the reliable "events" channel for game events (kills)
+/// Set up the reliable "events" channel for game events (kills, introductions)
 fn setup_events_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
+    let state_clone = state.clone();
+    let dc_clone = dc.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
         log::info!("Events channel open with peer {}", peer_id);
+        // Send our introduction to the peer
+        let name = state_clone.borrow().local_name.clone();
+        let msg = EventMessage::Introduction { name };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = dc_clone.send_with_str(&json);
+        }
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -666,6 +684,12 @@ fn setup_events_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) 
                     killer_id: peer_id,
                     victim_id,
                 });
+            }
+            EventMessage::Introduction { name } => {
+                log::info!("Peer {} introduced as '{}'", peer_id, name);
+                let mut s = state_clone.borrow_mut();
+                s.pending_events
+                    .push(NetworkEvent::PeerIntroduction { id: peer_id, name });
             }
         }
     }) as Box<dyn FnMut(JsValue)>);

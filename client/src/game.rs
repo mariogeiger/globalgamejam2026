@@ -10,8 +10,17 @@ use crate::config::*;
 use crate::input::InputState;
 use crate::mesh::Mesh;
 use crate::network::{GamePhase, NetworkEvent, PeerId};
-use crate::player::{MaskType, Player, RemotePlayer};
+use crate::player::{MaskType, Player, RemotePlayer, look_direction_from_angles};
 use winit::keyboard::KeyCode;
+
+/// State captured at moment of death for grace period targeting
+struct DeathState {
+    time: Instant,
+    position: Vec3,
+    yaw: f32,
+    pitch: f32,
+    mask: MaskType,
+}
 
 /// A death location with position and random tilt rotation
 pub struct DeathMarker {
@@ -61,6 +70,12 @@ pub struct GameState {
     pub mask_change_time: Option<f32>,
     /// Locations where players have died (persists across rounds)
     pub death_locations: Vec<DeathMarker>,
+    /// Death state for grace period targeting (frozen position/orientation)
+    death_state: Option<DeathState>,
+    /// Local player's name
+    pub local_name: Option<String>,
+    /// Local player's total kills
+    pub local_kills: u32,
 }
 
 impl GameState {
@@ -110,7 +125,14 @@ impl GameState {
             time: 0.0,
             mask_change_time: None,
             death_locations: Vec::new(),
+            death_state: None,
+            local_name: None,
+            local_kills: 0,
         }
+    }
+
+    pub fn set_local_name(&mut self, name: String) {
+        self.local_name = Some(name);
     }
 
     fn extract_collision_data(mesh: &Mesh) -> (Vec<Vec3>, Vec<[u32; 3]>, (Vec3, Vec3)) {
@@ -177,6 +199,20 @@ impl GameState {
             self.is_dead || self.phase == GamePhase::Victory || self.phase == GamePhase::Spectating;
         if is_spectator {
             self.player.spectator_update(dt, input);
+
+            // Continue targeting from frozen death position during grace period
+            if self.is_dead
+                && let Some(ref death) = self.death_state
+                && death.time.elapsed().as_secs_f32() <= DEATH_GRACE_PERIOD
+            {
+                self.update_targeting_from_state(
+                    dt,
+                    death.position,
+                    death.yaw,
+                    death.pitch,
+                    death.mask,
+                );
+            }
             return;
         }
 
@@ -257,17 +293,33 @@ impl GameState {
             return;
         }
 
+        let eye_pos = self.player.eye_position();
+        let yaw = self.player.yaw;
+        let pitch = self.player.pitch;
+        let mask = self.player.mask;
+
+        self.update_targeting_from_state(dt, eye_pos, yaw, pitch, mask);
+    }
+
+    /// Targeting logic that can use either live player state or frozen death state
+    fn update_targeting_from_state(
+        &mut self,
+        dt: f32,
+        eye_pos: Vec3,
+        yaw: f32,
+        pitch: f32,
+        mask: MaskType,
+    ) {
         // Coward mask cannot kill
-        let can_kill = self.player.mask != MaskType::Coward;
+        let can_kill = mask != MaskType::Coward;
 
         // Hunter mask kills faster
-        let kill_duration = match self.player.mask {
+        let kill_duration = match mask {
             MaskType::Hunter => HUNTER_KILL_DURATION,
             _ => TARGETING_DURATION,
         };
 
-        let eye_pos = self.player.eye_position();
-        let look_dir = self.player.look_direction();
+        let look_dir = look_direction_from_angles(yaw, pitch);
         let half_angle_rad = (TARGETING_ANGLE / 2.0).to_radians();
 
         let mut new_kills = Vec::new();
@@ -301,6 +353,7 @@ impl GameState {
                         remote.targeted_time = 0.0;
                         new_kills.push(peer_id);
                         self.pending_death_sounds += 1;
+                        self.local_kills += 1;
                         log::info!("Killed enemy {}!", peer_id);
                     }
                 } else {
@@ -441,6 +494,11 @@ impl GameState {
             } => {
                 log::info!("Player {} was killed by {}", victim_id, killer_id);
 
+                // Increment killer's kill count
+                if let Some(killer) = self.remote_players.get_mut(&killer_id) {
+                    killer.kills += 1;
+                }
+
                 // Check if we are the victim
                 if let Some(local_id) = local_peer_id
                     && victim_id == local_id
@@ -450,8 +508,21 @@ impl GameState {
                         .push(DeathMarker::new(self.player.position));
                     self.is_dead = true;
                     self.just_died = true;
+                    // Record death state for grace period targeting
+                    self.death_state = Some(DeathState {
+                        time: Instant::now(),
+                        position: self.player.eye_position(),
+                        yaw: self.player.yaw,
+                        pitch: self.player.pitch,
+                        mask: self.player.mask,
+                    });
                     self.pending_death_sounds += 1;
-                    show_death_overlay(killer_id);
+                    // Get killer name if available
+                    let killer_name = self
+                        .remote_players
+                        .get(&killer_id)
+                        .and_then(|p| p.name.clone());
+                    show_death_overlay(killer_name);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
                     // Record death location
                     self.death_locations.push(DeathMarker::new(remote.position));
@@ -461,6 +532,12 @@ impl GameState {
                     if local_peer_id != Some(killer_id) {
                         self.pending_death_sounds += 1;
                     }
+                }
+            }
+            NetworkEvent::PeerIntroduction { id, name } => {
+                log::info!("Peer {} is named '{}'", id, name);
+                if let Some(remote) = self.remote_players.get_mut(&id) {
+                    remote.name = Some(name);
                 }
             }
         }
@@ -482,6 +559,7 @@ impl GameState {
                 // New round starting - reset state
                 if old_phase != GamePhase::GracePeriod {
                     self.is_dead = false;
+                    self.death_state = None;
                     self.winner_id = None;
                     self.pending_kills.clear();
                     self.respawn_player();
@@ -506,7 +584,7 @@ impl GameState {
                 hide_spectating_overlay();
             }
             GamePhase::Victory => {
-                // Determine winner
+                // Determine winner (survivor)
                 if !self.is_dead {
                     self.winner_id = self.local_peer_id;
                 } else {
@@ -519,7 +597,29 @@ impl GameState {
 
                 let is_local_winner =
                     self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
-                show_victory_overlay(self.winner_id, is_local_winner);
+
+                // Build scoreboard
+                let mut scores: Vec<(String, u32, bool, bool)> = Vec::new();
+
+                // Add local player
+                let local_name = self.local_name.clone().unwrap_or_else(|| "You".to_string());
+                let local_is_survivor = self.winner_id == self.local_peer_id;
+                scores.push((local_name, self.local_kills, true, local_is_survivor));
+
+                // Add remote players
+                for (&id, player) in &self.remote_players {
+                    let name = player
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("Player {}", id));
+                    let is_survivor = self.winner_id == Some(id);
+                    scores.push((name, player.kills, false, is_survivor));
+                }
+
+                // Sort by kills descending
+                scores.sort_by(|a, b| b.1.cmp(&a.1));
+
+                show_victory_overlay(is_local_winner, scores);
             }
             GamePhase::Spectating => {
                 // Joined mid-game, show spectating message
@@ -539,9 +639,11 @@ impl GameState {
             e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
         }
 
-        // Update countdown timer during grace period
-        if self.phase == GamePhase::GracePeriod {
-            update_countdown_display(self.phase_timer.ceil() as u32);
+        // Update countdown timers
+        match self.phase {
+            GamePhase::GracePeriod => update_countdown_display(self.phase_timer.ceil() as u32),
+            GamePhase::Victory => update_victory_countdown(self.phase_timer.ceil() as u32),
+            _ => {}
         }
     }
 
@@ -558,13 +660,14 @@ impl GameState {
     }
 }
 
-fn show_death_overlay(killer_id: PeerId) {
+fn show_death_overlay(killer_name: Option<String>) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         if let Some(overlay) = doc.get_element_by_id("death-overlay") {
             let _ = overlay.set_attribute("style", "display: block;");
         }
         if let Some(killer_elem) = doc.get_element_by_id("killer-id") {
-            killer_elem.set_text_content(Some(&killer_id.to_string()));
+            let display_name = killer_name.unwrap_or_else(|| "Unknown".to_string());
+            killer_elem.set_text_content(Some(&display_name));
         }
     }
 }
@@ -601,6 +704,14 @@ fn update_countdown_display(seconds: u32) {
     }
 }
 
+fn update_victory_countdown(seconds: u32) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(e) = doc.get_element_by_id("victory-countdown")
+    {
+        e.set_text_content(Some(&seconds.to_string()));
+    }
+}
+
 fn show_waiting_overlay() {
     if let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
@@ -617,25 +728,42 @@ fn hide_waiting_overlay() {
     }
 }
 
-fn show_victory_overlay(winner_id: Option<PeerId>, is_local_winner: bool) {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        if let Some(overlay) = doc.get_element_by_id("victory-overlay") {
-            let _ = overlay.set_attribute("style", "display: block;");
-        }
-        if let Some(title) = doc.get_element_by_id("victory-title") {
-            if is_local_winner {
-                title.set_text_content(Some("VICTORY!"));
-            } else {
-                title.set_text_content(Some("DEFEATED"));
+/// Show victory overlay with scoreboard
+/// scores: Vec of (name, kills, is_local, is_survivor)
+fn show_victory_overlay(is_local_winner: bool, scores: Vec<(String, u32, bool, bool)>) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+
+    if let Some(overlay) = doc.get_element_by_id("victory-overlay") {
+        let _ = overlay.set_attribute("style", "display: block;");
+    }
+    if let Some(title) = doc.get_element_by_id("victory-title") {
+        title.set_text_content(Some(if is_local_winner {
+            "VICTORY!"
+        } else {
+            "DEFEATED"
+        }));
+    }
+
+    // Build scoreboard HTML
+    if let Some(scoreboard) = doc.get_element_by_id("scoreboard") {
+        let mut html = String::new();
+        for (name, kills, is_local, is_survivor) in scores {
+            let mut classes = Vec::new();
+            if is_local {
+                classes.push("local");
             }
-        }
-        if let Some(winner_elem) = doc.get_element_by_id("winner-id") {
-            if let Some(id) = winner_id {
-                winner_elem.set_text_content(Some(&format!("Player {} wins!", id)));
-            } else {
-                winner_elem.set_text_content(Some("Draw!"));
+            if is_survivor {
+                classes.push("survivor");
             }
+            let class_str = classes.join(" ");
+            html.push_str(&format!(
+                r#"<div class="score-row {}"><span class="name">{}</span><span class="kills">{}</span></div>"#,
+                class_str, name, kills
+            ));
         }
+        scoreboard.set_inner_html(&html);
     }
 }
 

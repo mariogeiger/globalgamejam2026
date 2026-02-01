@@ -32,6 +32,7 @@ pub const SPAWN_POINTS: &[[f32; 3]] = &[
 // Targeting system
 pub const TARGETING_ANGLE: f32 = 60.0;
 pub const TARGETING_DURATION: f32 = 1.0;
+pub const DEATH_GRACE_PERIOD: f32 = 0.05; // 50ms for continued targeting after death
 
 // Mask system
 pub const COWARD_SPEED_MULTIPLIER: f32 = 1.5;

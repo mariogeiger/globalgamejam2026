@@ -34,8 +34,8 @@ web-sys = { version = "0.3.85", features = [
     "RtcDataChannelState", "RtcSessionDescription", "RtcSessionDescriptionInit",
     "RtcSdpType", "RtcConfiguration", "RtcSignalingState", "RtcIceConnectionState",
     "RtcIceGatheringState", "MessageEvent",
-    "HtmlTextAreaElement", "HtmlButtonElement", "HtmlElement",
+    "HtmlTextAreaElement", "HtmlButtonElement", "HtmlElement", "HtmlInputElement",
     "WebSocket", "BinaryType", "CloseEvent", "ErrorEvent",
-    "RtcIceServer", "MouseEvent", "PointerEvent", "console",
-    "HtmlAudioElement", "Blob", "BlobPropertyBag"
+    "RtcIceServer", "MouseEvent", "PointerEvent", "KeyboardEvent", "console",
+    "HtmlAudioElement", "Blob", "BlobPropertyBag", "EventTarget"
 ] }

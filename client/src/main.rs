@@ -34,8 +34,9 @@ struct ClientState {
     renderer: Renderer,
     game: GameState,
     input: InputState,
-    network: NetworkClient,
+    network: Option<NetworkClient>,
     audio: Audio,
+    player_name: Option<String>,
 }
 
 struct App {
@@ -103,19 +104,20 @@ impl ApplicationHandler for App {
             let renderer = Renderer::new(window_clone.clone(), &map_mesh).await;
             let game = GameState::new(&map_mesh, DEBUG_MANNEQUINS);
             let input = InputState::new();
-            let network = NetworkClient::new().expect("Failed to create network client");
 
             let audio = Audio::new();
             let state = ClientState {
                 renderer,
                 game,
                 input,
-                network,
+                network: None,
                 audio,
+                player_name: None,
             };
 
             STATE.with(|s| *s.borrow_mut() = Some(state));
             init_mask_images();
+            setup_main_menu();
             window_clone.request_redraw();
         });
     }
@@ -170,18 +172,26 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(canvas) = web_sys::window()
-                    .and_then(|w| w.document())
-                    .and_then(|d| d.get_element_by_id("wasm-container"))
-                    .and_then(|c| c.first_element_child())
-                {
-                    canvas.request_pointer_lock();
-                    STATE.with(|s| {
+                // Only capture pointer if player has connected (entered their name)
+                STATE.with(|s| {
+                    let should_capture = s
+                        .borrow()
+                        .as_ref()
+                        .map(|state| state.network.is_some())
+                        .unwrap_or(false);
+
+                    if should_capture
+                        && let Some(canvas) = web_sys::window()
+                            .and_then(|w| w.document())
+                            .and_then(|d| d.get_element_by_id("wasm-container"))
+                            .and_then(|c| c.first_element_child())
+                    {
+                        canvas.request_pointer_lock();
                         if let Some(state) = s.borrow_mut().as_mut() {
                             state.input.cursor_grabbed = true;
                         }
-                    });
-                }
+                    }
+                });
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 STATE.with(|s| {
@@ -198,19 +208,22 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
-                        // Check AFK timeout
-                        if state.network.is_connected()
-                            && state.input.seconds_since_activity() > AFK_TIMEOUT_SECONDS
-                        {
-                            log::info!("Disconnecting due to inactivity");
-                            state.network.disconnect();
-                            show_afk_overlay();
-                        }
+                        // Only process network if connected
+                        if let Some(ref network) = state.network {
+                            // Check AFK timeout
+                            if network.is_connected()
+                                && state.input.seconds_since_activity() > AFK_TIMEOUT_SECONDS
+                            {
+                                log::info!("Disconnecting due to inactivity");
+                                network.disconnect();
+                                show_afk_overlay();
+                            }
 
-                        let local_peer_id = state.network.local_id();
+                            let local_peer_id = network.local_id();
 
-                        for event in state.network.poll_events() {
-                            state.game.handle_network_event(event, local_peer_id);
+                            for event in network.poll_events() {
+                                state.game.handle_network_event(event, local_peer_id);
+                            }
                         }
 
                         state.game.update(&mut state.input);
@@ -222,23 +235,25 @@ impl ApplicationHandler for App {
                             state.audio.play_death();
                         }
 
-                        // Send any kills we made this frame
-                        for victim_id in state.game.take_pending_kills() {
-                            state.network.send_kill(victim_id);
-                        }
+                        if let Some(ref network) = state.network {
+                            // Send any kills we made this frame
+                            for victim_id in state.game.take_pending_kills() {
+                                network.send_kill(victim_id);
+                            }
 
-                        // Notify server if we just died
-                        if state.game.take_death_notification() {
-                            state.network.notify_death();
-                        }
+                            // Notify server if we just died
+                            if state.game.take_death_notification() {
+                                network.notify_death();
+                            }
 
-                        if state.network.is_connected() && !state.game.is_dead {
-                            state.network.send_player_state(
-                                state.game.player.position,
-                                state.game.player.yaw,
-                                state.game.player.pitch,
-                                state.game.player.mask as u8,
-                            );
+                            if network.is_connected() && !state.game.is_dead {
+                                network.send_player_state(
+                                    state.game.player.position,
+                                    state.game.player.yaw,
+                                    state.game.player.pitch,
+                                    state.game.player.mask as u8,
+                                );
+                            }
                         }
 
                         match state.renderer.render_frame(&state.game) {
@@ -274,6 +289,111 @@ fn show_afk_overlay() {
     }
 }
 
+fn random_french_name() -> String {
+    use rand::Rng;
+    const FIRST: &[&str] = &[
+        "Jean",
+        "Pierre",
+        "Marie",
+        "Louis",
+        "François",
+        "Antoine",
+        "Jacques",
+        "Michel",
+        "André",
+        "Philippe",
+        "Alain",
+        "Bernard",
+        "Claude",
+        "René",
+        "Marcel",
+        "Émile",
+        "Céline",
+        "Camille",
+        "Léa",
+        "Chloé",
+        "Manon",
+        "Inès",
+        "Jade",
+        "Zoé",
+        "Lola",
+        "Hugo",
+        "Lucas",
+        "Théo",
+        "Enzo",
+        "Mathis",
+        "Nathan",
+        "Maxime",
+        "Julien",
+    ];
+    const LAST: &[&str] = &[
+        "Martin", "Bernard", "Dubois", "Thomas", "Robert", "Richard", "Petit", "Durand", "Leroy",
+        "Moreau", "Simon", "Laurent", "Lefebvre", "Michel", "Garcia", "David", "Bertrand", "Roux",
+        "Vincent", "Fournier", "Morel", "Girard", "André", "Mercier",
+    ];
+    let mut rng = rand::rng();
+    let first = FIRST[rng.random_range(0..FIRST.len())];
+    let last = LAST[rng.random_range(0..LAST.len())];
+    format!("{} {}", first, last)
+}
+
+fn setup_main_menu() {
+    let doc = web_sys::window().and_then(|w| w.document()).unwrap();
+
+    // Focus input, set random name, and handle Enter key
+    if let Some(input) = doc.get_element_by_id("player-name-input") {
+        let html_input: web_sys::HtmlInputElement = input.clone().unchecked_into();
+        html_input.set_value(&random_french_name());
+        html_input.select();
+        let _ = html_input.focus();
+
+        let cb = Closure::wrap(Box::new(|e: web_sys::KeyboardEvent| {
+            if e.key() == "Enter" {
+                start_game();
+            }
+        }) as Box<dyn FnMut(_)>);
+        let _ = input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+
+    // Handle start button click
+    if let Some(btn) = doc.get_element_by_id("start-button") {
+        let cb =
+            Closure::wrap(Box::new(|_: web_sys::MouseEvent| start_game()) as Box<dyn FnMut(_)>);
+        let _ = btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+}
+
+fn start_game() {
+    let doc = web_sys::window().and_then(|w| w.document()).unwrap();
+    let input: web_sys::HtmlInputElement = doc
+        .get_element_by_id("player-name-input")
+        .unwrap()
+        .unchecked_into();
+    let name = input.value().trim().to_string();
+
+    if name.is_empty() {
+        input.set_placeholder("Please enter a name!");
+        return;
+    }
+
+    if let Some(menu) = doc.get_element_by_id("main-menu") {
+        let _ = menu.set_attribute("style", "display: none;");
+    }
+
+    STATE.with(|s| {
+        if let Some(state) = s.borrow_mut().as_mut() {
+            state.player_name = Some(name.clone());
+            state.game.set_local_name(name.clone());
+            if let Ok(network) = NetworkClient::new(name) {
+                state.network = Some(network);
+            }
+        }
+    });
+}
+
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
