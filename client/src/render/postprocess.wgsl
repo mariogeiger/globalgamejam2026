@@ -23,6 +23,8 @@ struct PostProcessParams {
     resolution: vec2<f32>,
     depth_near: f32,
     depth_far: f32,
+    inv_view_proj: mat4x4<f32>,
+    view: mat4x4<f32>,
 }
 
 struct VertexInput {
@@ -52,11 +54,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let far = params.depth_far;
     let d = (near * far) / (far - depth_buffer * (far - near));
 
-    let current = textureSample(t_scene, s_scene, in.tex_coord);
+    // Reconstruct world position from NDC + depth
+    let ndc = vec4<f32>(
+        2.0 * in.tex_coord.x - 1.0,
+        1.0 - 2.0 * in.tex_coord.y,
+        depth_buffer,
+        1.0,
+    );
+    let world_h = params.inv_view_proj * ndc;
+    let world_position = world_h.xyz / world_h.w;
 
+    // Position relative to camera (view space)
+    let screen_space_position = (params.view * vec4<f32>(world_position, 1.0)).xyz;
+
+    let current = textureSample(t_scene, s_scene, in.tex_coord);
     let d_vis = .5 + .5 * cos(d * 0.01 * 3.14159265358979323846);
 
     let previous = textureSample(t_previous, s_previous, in.tex_coord);
-    let smear = mix(current, previous, params.smear_factor * d_vis);
-    return smear;
+    // let smear = mix(current, previous, params.smear_factor * d_vis);
+
+    let screen_xy = (in.tex_coord.xy-vec2(.5))*vec2(params.resolution.x/params.resolution.y,1);
+    // if(length(screen_xy)>.25) {
+    //     return vec4(cos(world_position.xyz),1);
+    // }
+
+
+    return current;
 }
