@@ -11,19 +11,33 @@ use web_sys::{
     RtcSessionDescriptionInit, Url, WebSocket,
 };
 
-use crate::team::Team;
-
 pub type PeerId = u64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GamePhase {
+    WaitingForPlayers,
+    GracePeriod,
+    Playing,
+    Victory,
+}
 
 #[derive(Clone, Debug)]
 pub enum NetworkEvent {
-    TeamAssigned(Team),
+    Connected {
+        id: PeerId,
+        phase: GamePhase,
+        phase_time_remaining: f32,
+    },
     PeerJoined {
         id: PeerId,
-        team: Team,
     },
     PeerLeft {
         id: PeerId,
+    },
+    GamePhaseChanged {
+        phase: GamePhase,
+        time_remaining: f32,
     },
     PlayerState {
         id: PeerId,
@@ -68,7 +82,6 @@ enum EventMessage {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PeerInfo {
     id: PeerId,
-    team: Team,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -78,19 +91,27 @@ enum ServerMessage {
     Welcome {
         #[serde(rename = "clientId")]
         client_id: PeerId,
-        team: Team,
         peers: Vec<PeerInfo>,
+        #[serde(rename = "gamePhase")]
+        game_phase: GamePhase,
+        #[serde(rename = "phaseTimeRemaining")]
+        phase_time_remaining: f32,
     },
     #[serde(rename = "peer-joined")]
     PeerJoined {
         #[serde(rename = "peerId")]
         peer_id: PeerId,
-        team: Team,
     },
     #[serde(rename = "peer-left")]
     PeerLeft {
         #[serde(rename = "peerId")]
         peer_id: PeerId,
+    },
+    #[serde(rename = "game-phase")]
+    GamePhase {
+        phase: GamePhase,
+        #[serde(rename = "timeRemaining")]
+        time_remaining: f32,
     },
     #[serde(rename = "offer")]
     Offer {
@@ -123,7 +144,6 @@ struct PeerConnection {
     state_channel: Option<RtcDataChannel>,
     /// Reliable channel for game events (kills)
     events_channel: Option<RtcDataChannel>,
-    team: Team,
     pending_candidates: Vec<IceCandidateData>,
 }
 
@@ -136,9 +156,7 @@ struct IceCandidateData {
 
 #[derive(Default)]
 struct RtcState {
-    #[allow(dead_code)]
     local_id: Option<PeerId>,
-    local_team: Option<Team>,
     peers: HashMap<PeerId, PeerConnection>,
     pending_events: Vec<NetworkEvent>,
 }
@@ -147,6 +165,7 @@ type StateRef = Rc<RefCell<RtcState>>;
 
 pub struct NetworkClient {
     state: StateRef,
+    ws: WebSocket,
 }
 
 impl NetworkClient {
@@ -185,7 +204,7 @@ impl NetworkClient {
             update_status("Disconnected from server");
         });
 
-        Ok(Self { state })
+        Ok(Self { state, ws })
     }
 
     pub fn poll_events(&self) -> Vec<NetworkEvent> {
@@ -225,7 +244,11 @@ impl NetworkClient {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.state.borrow().local_team.is_some()
+        self.state.borrow().local_id.is_some()
+    }
+
+    pub fn notify_death(&self) {
+        let _ = self.ws.send_with_str(r#"{"type":"player_died"}"#);
     }
 }
 
@@ -271,29 +294,34 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
         match msg {
             ServerMessage::Welcome {
                 client_id,
-                team,
                 peers,
+                game_phase,
+                phase_time_remaining,
             } => {
                 log::info!(
-                    "Welcome! I am client {} on team {:?}, {} peers in game",
+                    "Welcome! I am client {}, {} peers in game, phase: {:?}",
                     client_id,
-                    team,
-                    peers.len()
+                    peers.len(),
+                    game_phase
                 );
 
                 {
                     let mut s = state.borrow_mut();
                     s.local_id = Some(client_id);
-                    s.local_team = Some(team);
-                    s.pending_events.push(NetworkEvent::TeamAssigned(team));
+                    s.pending_events.push(NetworkEvent::Connected {
+                        id: client_id,
+                        phase: game_phase,
+                        phase_time_remaining,
+                    });
                 }
 
-                let status = format!(
-                    "You are Team {} ({}). {} other player(s) in game.",
-                    if team == Team::A { "A" } else { "B" },
-                    if team == Team::A { "Blue" } else { "Red" },
-                    peers.len()
-                );
+                let status = if peers.is_empty() {
+                    "Connected! Waiting for other players...".to_string()
+                } else if peers.len() == 1 {
+                    "Connected! 1 other player in game.".to_string()
+                } else {
+                    format!("Connected! {} other players in game.", peers.len())
+                };
                 update_status(&status);
 
                 for peer_info in peers {
@@ -318,14 +346,11 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                                     pc: pc.clone(),
                                     state_channel: Some(state_dc),
                                     events_channel: Some(events_dc),
-                                    team: peer_info.team,
                                     pending_candidates: Vec::new(),
                                 },
                             );
-                            s.pending_events.push(NetworkEvent::PeerJoined {
-                                id: peer_info.id,
-                                team: peer_info.team,
-                            });
+                            s.pending_events
+                                .push(NetworkEvent::PeerJoined { id: peer_info.id });
                         }
 
                         if let Ok(offer) =
@@ -344,8 +369,8 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     }
                 }
             }
-            ServerMessage::PeerJoined { peer_id, team } => {
-                log::info!("Peer {} joined on team {:?}", peer_id, team);
+            ServerMessage::PeerJoined { peer_id } => {
+                log::info!("Peer {} joined", peer_id);
 
                 if let Ok(pc) = create_peer_connection(&ws, &state, peer_id) {
                     let mut s = state.borrow_mut();
@@ -355,12 +380,11 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                             pc,
                             state_channel: None,
                             events_channel: None,
-                            team,
                             pending_candidates: Vec::new(),
                         },
                     );
                     s.pending_events
-                        .push(NetworkEvent::PeerJoined { id: peer_id, team });
+                        .push(NetworkEvent::PeerJoined { id: peer_id });
                 }
                 update_peer_count(&state);
             }
@@ -375,6 +399,21 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .push(NetworkEvent::PeerLeft { id: peer_id });
                 }
                 update_peer_count(&state);
+            }
+            ServerMessage::GamePhase {
+                phase,
+                time_remaining,
+            } => {
+                log::info!(
+                    "Game phase changed to {:?}, time: {}",
+                    phase,
+                    time_remaining
+                );
+                let mut s = state.borrow_mut();
+                s.pending_events.push(NetworkEvent::GamePhaseChanged {
+                    phase,
+                    time_remaining,
+                });
             }
             ServerMessage::Offer { from_id, sdp } => {
                 log::info!("Received offer from peer {}", from_id);
@@ -700,14 +739,16 @@ fn update_peer_count(state: &StateRef) {
                 .is_some_and(|dc| dc.ready_state() == web_sys::RtcDataChannelState::Open)
         })
         .count();
-    let total_count = s.peers.len();
+    let total_peers = s.peers.len();
 
-    let status = if connected_count == total_count && total_count > 0 {
-        format!("Connected! {} player(s) in game.", total_count + 1)
-    } else if total_count > 0 {
-        format!("Connecting... {}/{} peers", connected_count, total_count)
-    } else {
+    let status = if total_peers == 0 {
         "Waiting for other players...".to_string()
+    } else if connected_count < total_peers {
+        format!("Connecting... {}/{} peers", connected_count, total_peers)
+    } else {
+        // All peers connected, total_peers + 1 = total players including self
+        let total_players = total_peers + 1;
+        format!("Connected! {} players in game.", total_players)
     };
     update_status(&status);
 }

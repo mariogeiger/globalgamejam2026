@@ -5,12 +5,20 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 
+const GRACE_PERIOD_DURATION: f32 = 10.0;
+const VICTORY_DURATION: f32 = 10.0;
+const MIN_PLAYERS_TO_START: usize = 2;
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Team {
-    A,
-    B,
+#[serde(rename_all = "snake_case")]
+pub enum GamePhase {
+    WaitingForPlayers,
+    GracePeriod,
+    Playing,
+    Victory,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -40,6 +48,8 @@ enum ClientMessage {
         #[serde(rename = "sdpMLineIndex")]
         sdp_m_line_index: Option<u16>,
     },
+    #[serde(rename = "player_died")]
+    PlayerDied,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -49,19 +59,27 @@ enum ServerMessage {
     Welcome {
         #[serde(rename = "clientId")]
         client_id: ClientId,
-        team: Team,
         peers: Vec<PeerInfo>,
+        #[serde(rename = "gamePhase")]
+        game_phase: GamePhase,
+        #[serde(rename = "phaseTimeRemaining")]
+        phase_time_remaining: f32,
     },
     #[serde(rename = "peer-joined")]
     PeerJoined {
         #[serde(rename = "peerId")]
         peer_id: ClientId,
-        team: Team,
     },
     #[serde(rename = "peer-left")]
     PeerLeft {
         #[serde(rename = "peerId")]
         peer_id: ClientId,
+    },
+    #[serde(rename = "game-phase")]
+    GamePhase {
+        phase: GamePhase,
+        #[serde(rename = "timeRemaining")]
+        time_remaining: f32,
     },
     #[serde(rename = "offer")]
     Offer {
@@ -90,20 +108,22 @@ enum ServerMessage {
 #[derive(Serialize, Debug, Clone)]
 struct PeerInfo {
     id: ClientId,
-    team: Team,
 }
 
 type ClientId = u64;
 type ClientSender = mpsc::UnboundedSender<String>;
 
 struct ClientInfo {
-    team: Team,
     sender: ClientSender,
+    is_alive: bool,
 }
 
 struct SignalingState {
     next_id: ClientId,
     clients: HashMap<ClientId, ClientInfo>,
+    game_phase: GamePhase,
+    phase_start: Instant,
+    phase_duration: f32,
 }
 
 impl SignalingState {
@@ -111,17 +131,47 @@ impl SignalingState {
         Self {
             next_id: 0,
             clients: HashMap::new(),
+            game_phase: GamePhase::WaitingForPlayers,
+            phase_start: Instant::now(),
+            phase_duration: 0.0,
         }
     }
 
-    fn assign_team(&self) -> Team {
-        let team_a_count = self.clients.values().filter(|c| c.team == Team::A).count();
-        let team_b_count = self.clients.values().filter(|c| c.team == Team::B).count();
-        if team_a_count <= team_b_count {
-            Team::A
-        } else {
-            Team::B
+    fn phase_time_remaining(&self) -> f32 {
+        let elapsed = self.phase_start.elapsed().as_secs_f32();
+        (self.phase_duration - elapsed).max(0.0)
+    }
+
+    fn broadcast(&self, msg: &ServerMessage) {
+        if let Ok(json) = serde_json::to_string(msg) {
+            for info in self.clients.values() {
+                let _ = info.sender.send(json.clone());
+            }
         }
+    }
+
+    fn set_phase(&mut self, phase: GamePhase, duration: f32) {
+        self.game_phase = phase;
+        self.phase_start = Instant::now();
+        self.phase_duration = duration;
+
+        // Reset all players to alive when starting a new round
+        if phase == GamePhase::GracePeriod {
+            for client in self.clients.values_mut() {
+                client.is_alive = true;
+            }
+        }
+
+        log::info!("Game phase changed to {:?}, duration: {}s", phase, duration);
+
+        self.broadcast(&ServerMessage::GamePhase {
+            phase,
+            time_remaining: duration,
+        });
+    }
+
+    fn alive_count(&self) -> usize {
+        self.clients.values().filter(|c| c.is_alive).count()
     }
 }
 
@@ -131,6 +181,55 @@ static STATE: std::sync::OnceLock<SharedState> = std::sync::OnceLock::new();
 
 fn get_state() -> &'static SharedState {
     STATE.get_or_init(|| Arc::new(Mutex::new(SignalingState::new())))
+}
+
+pub fn start_game_loop() {
+    let state = get_state().clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            update_game_state(&state).await;
+        }
+    });
+}
+
+async fn update_game_state(state: &SharedState) {
+    let mut s = state.lock().await;
+
+    let time_remaining = s.phase_time_remaining();
+    let player_count = s.clients.len();
+    let alive_count = s.alive_count();
+
+    match s.game_phase {
+        GamePhase::WaitingForPlayers => {
+            if player_count >= MIN_PLAYERS_TO_START {
+                s.set_phase(GamePhase::GracePeriod, GRACE_PERIOD_DURATION);
+            }
+        }
+        GamePhase::GracePeriod => {
+            if time_remaining <= 0.0 {
+                s.set_phase(GamePhase::Playing, 0.0); // No time limit for playing
+            }
+        }
+        GamePhase::Playing => {
+            // Check for victory condition
+            if player_count >= MIN_PLAYERS_TO_START && alive_count <= 1 {
+                s.set_phase(GamePhase::Victory, VICTORY_DURATION);
+            } else if player_count < MIN_PLAYERS_TO_START {
+                // Not enough players, go back to waiting
+                s.set_phase(GamePhase::WaitingForPlayers, 0.0);
+            }
+        }
+        GamePhase::Victory => {
+            if time_remaining <= 0.0 {
+                if player_count >= MIN_PLAYERS_TO_START {
+                    s.set_phase(GamePhase::GracePeriod, GRACE_PERIOD_DURATION);
+                } else {
+                    s.set_phase(GamePhase::WaitingForPlayers, 0.0);
+                }
+            }
+        }
+    }
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -192,31 +291,18 @@ async fn handle_message(
         ClientMessage::Join => {
             let mut s = state.lock().await;
 
-            // Assign team (balance teams)
-            let team = s.assign_team();
-
             // Get list of existing peers
-            let peers: Vec<PeerInfo> = s
-                .clients
-                .iter()
-                .map(|(&id, info)| PeerInfo {
-                    id,
-                    team: info.team,
-                })
-                .collect();
+            let peers: Vec<PeerInfo> = s.clients.iter().map(|(&id, _)| PeerInfo { id }).collect();
 
             log::info!(
-                "Client {} joined as Team {:?}, {} existing peers",
+                "Client {} joined, {} existing peers, phase: {:?}",
                 client_id,
-                team,
-                peers.len()
+                peers.len(),
+                s.game_phase
             );
 
             // Broadcast peer-joined to all existing clients
-            let peer_joined = ServerMessage::PeerJoined {
-                peer_id: client_id,
-                team,
-            };
+            let peer_joined = ServerMessage::PeerJoined { peer_id: client_id };
             if let Ok(json) = serde_json::to_string(&peer_joined) {
                 for info in s.clients.values() {
                     let _ = info.sender.send(json.clone());
@@ -224,22 +310,36 @@ async fn handle_message(
             }
 
             // Add this client to the room
+            // Late joiners start as dead if game is in progress
+            let is_alive = matches!(
+                s.game_phase,
+                GamePhase::WaitingForPlayers | GamePhase::GracePeriod
+            );
+
             s.clients.insert(
                 client_id,
                 ClientInfo {
-                    team,
                     sender: sender.clone(),
+                    is_alive,
                 },
             );
 
-            // Send welcome message to the new client
+            // Send welcome message to the new client with game state
             let welcome = ServerMessage::Welcome {
                 client_id,
-                team,
                 peers,
+                game_phase: s.game_phase,
+                phase_time_remaining: s.phase_time_remaining(),
             };
             if let Ok(json) = serde_json::to_string(&welcome) {
                 let _ = sender.send(json);
+            }
+        }
+        ClientMessage::PlayerDied => {
+            let mut s = state.lock().await;
+            if let Some(client) = s.clients.get_mut(&client_id) {
+                client.is_alive = false;
+                log::info!("Client {} died, {} alive", client_id, s.alive_count());
             }
         }
         ClientMessage::Offer { target_id, sdp } => {

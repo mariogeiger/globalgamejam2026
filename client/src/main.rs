@@ -17,7 +17,6 @@ mod map;
 mod network;
 mod player;
 mod render;
-mod team;
 
 use config::DEBUG_MANNEQUINS;
 use game::GameState;
@@ -190,6 +189,11 @@ impl ApplicationHandler for App {
                         // Send any kills we made this frame
                         for victim_id in state.game.take_pending_kills() {
                             state.network.send_kill(victim_id);
+                        }
+
+                        // Notify server if we just died
+                        if state.game.take_death_notification() {
+                            state.network.notify_death();
                         }
 
                         if state.network.is_connected() && !state.game.is_dead {

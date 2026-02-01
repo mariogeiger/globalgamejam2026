@@ -7,9 +7,8 @@ use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
 use crate::map::LoadedMap;
-use crate::network::{NetworkEvent, PeerId};
+use crate::network::{GamePhase, NetworkEvent, PeerId};
 use crate::player::{Player, RemotePlayer};
-use crate::team::Team;
 
 pub struct GameState {
     pub player: Player,
@@ -17,15 +16,18 @@ pub struct GameState {
     pub physics: PhysicsWorld,
     pub spawn_points: Vec<Vec3>,
     pub map_bounds: (Vec3, Vec3),
-    pub local_team: Option<Team>,
     pub is_dead: bool,
-    pub killer_id: Option<PeerId>,
+    pub phase: GamePhase,
+    pub phase_timer: f32,
+    pub winner_id: Option<PeerId>,
     last_update: Instant,
     pending_kills: Vec<PeerId>,
+    local_peer_id: Option<PeerId>,
+    just_died: bool,
 }
 
 impl GameState {
-    pub fn new(map: &LoadedMap, debug_mannequins: bool) -> Self {
+    pub fn new(map: &LoadedMap, _debug_mannequins: bool) -> Self {
         let spawn_idx = rand::rng().random_range(0..map.spawn_points.len());
         let initial_spawn = map.spawn_points[spawn_idx];
 
@@ -33,31 +35,20 @@ impl GameState {
         let physics = PhysicsWorld::new(&map.collision_vertices, &map.collision_indices)
             .expect("Failed to create physics world");
 
-        let mut remote_players = HashMap::new();
-        if debug_mannequins {
-            let mannequin_a = RemotePlayer::new(Team::A);
-            let mannequin_b = RemotePlayer::new(Team::B);
-            log::info!(
-                "Creating mannequins - A at {:?}, B at {:?}, player at {:?}",
-                mannequin_a.position,
-                mannequin_b.position,
-                initial_spawn
-            );
-            remote_players.insert(u64::MAX, mannequin_a);
-            remote_players.insert(u64::MAX - 1, mannequin_b);
-        }
-
         Self {
             player,
-            remote_players,
+            remote_players: HashMap::new(),
             physics,
             spawn_points: map.spawn_points.clone(),
             map_bounds: (map.bounds_min, map.bounds_max),
-            local_team: None,
             is_dead: false,
-            killer_id: None,
+            phase: GamePhase::WaitingForPlayers,
+            phase_timer: 0.0,
+            winner_id: None,
             last_update: Instant::now(),
             pending_kills: Vec::new(),
+            local_peer_id: None,
+            just_died: false,
         }
     }
 
@@ -66,12 +57,18 @@ impl GameState {
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
 
-        // Handle death/respawn timer
-        self.update_death(dt);
+        // Update local phase timer for display
+        if self.phase_timer > 0.0 {
+            self.phase_timer = (self.phase_timer - dt).max(0.0);
+        }
 
-        // Don't process movement while dead
-        if self.is_dead {
-            self.update_coordinates_display();
+        self.update_hud_display();
+
+        // Don't process movement while dead or in victory/waiting phase
+        if self.is_dead
+            || self.phase == GamePhase::Victory
+            || self.phase == GamePhase::WaitingForPlayers
+        {
             return;
         }
 
@@ -90,8 +87,11 @@ impl GameState {
         self.player.set_on_ground(on_ground, None);
 
         self.check_respawn();
-        self.update_targeting(dt);
-        self.update_coordinates_display();
+
+        // Only update targeting during Playing phase
+        if self.phase == GamePhase::Playing {
+            self.update_targeting(dt);
+        }
     }
 
     fn check_respawn(&mut self) {
@@ -111,20 +111,17 @@ impl GameState {
     }
 
     pub fn respawn_player(&mut self) {
-        if let Some(team) = self.local_team {
-            let spawns = team.spawn_points();
-            if !spawns.is_empty() {
-                let idx = rand::rng().random_range(0..spawns.len());
-                let spawn = spawns[idx];
-                self.player.respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
-            }
-        } else if !self.spawn_points.is_empty() {
+        if !self.spawn_points.is_empty() {
             let idx = rand::rng().random_range(0..self.spawn_points.len());
             self.player.respawn(self.spawn_points[idx]);
         }
     }
 
     fn update_targeting(&mut self, dt: f32) {
+        if self.is_dead {
+            return;
+        }
+
         let eye_pos = self.player.eye_position();
         let look_dir = self.player.look_direction();
         let half_angle_rad = (TARGETING_ANGLE / 2.0).to_radians();
@@ -133,18 +130,6 @@ impl GameState {
 
         for (&peer_id, remote) in self.remote_players.iter_mut() {
             if !remote.is_alive {
-                remote.dead_time += dt;
-                if remote.dead_time >= RESPAWN_DELAY {
-                    remote.respawn();
-                    log::info!("Enemy {} respawned!", peer_id);
-                }
-                continue;
-            }
-
-            if let Some(local_team) = self.local_team
-                && remote.team == local_team
-            {
-                remote.targeted_time = 0.0;
                 continue;
             }
 
@@ -182,17 +167,26 @@ impl GameState {
         std::mem::take(&mut self.pending_kills)
     }
 
+    /// Check if local player just died (needs to notify server)
+    pub fn take_death_notification(&mut self) -> bool {
+        if self.just_died {
+            self.just_died = false;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get_targeting_info(&self) -> (f32, bool) {
+        if self.phase != GamePhase::Playing || self.is_dead {
+            return (0.0, false);
+        }
+
         let mut max_progress = 0.0f32;
         let mut has_target = false;
 
         for remote in self.remote_players.values() {
             if !remote.is_alive {
-                continue;
-            }
-            if let Some(local_team) = self.local_team
-                && remote.team == local_team
-            {
                 continue;
             }
             if remote.targeted_time > 0.0 {
@@ -206,27 +200,42 @@ impl GameState {
 
     pub fn handle_network_event(&mut self, event: NetworkEvent, local_peer_id: Option<PeerId>) {
         match event {
-            NetworkEvent::TeamAssigned(team) => {
-                log::info!("Assigned to team: {:?}", team);
-                self.local_team = Some(team);
-                let spawns = team.spawn_points();
-                if !spawns.is_empty() {
-                    let idx = rand::rng().random_range(0..spawns.len());
-                    let spawn = spawns[idx];
-                    self.player.respawn(Vec3::new(spawn[0], spawn[1], spawn[2]));
-                }
-                self.update_team_counts_display();
+            NetworkEvent::Connected {
+                id,
+                phase,
+                phase_time_remaining,
+            } => {
+                log::info!(
+                    "Connected with ID: {}, phase: {:?}, time: {}",
+                    id,
+                    phase,
+                    phase_time_remaining
+                );
+                self.local_peer_id = Some(id);
+                self.set_phase(phase, phase_time_remaining);
+                self.update_player_count_display();
             }
-            NetworkEvent::PeerJoined { id, team } => {
-                log::info!("Peer {} joined on team {:?}", id, team);
-                let remote = RemotePlayer::new(team);
+            NetworkEvent::PeerJoined { id } => {
+                log::info!("Peer {} joined", id);
+                let remote = RemotePlayer::new();
                 self.remote_players.insert(id, remote);
-                self.update_team_counts_display();
+                self.update_player_count_display();
             }
             NetworkEvent::PeerLeft { id } => {
                 log::info!("Peer {} left", id);
                 self.remote_players.remove(&id);
-                self.update_team_counts_display();
+                self.update_player_count_display();
+            }
+            NetworkEvent::GamePhaseChanged {
+                phase,
+                time_remaining,
+            } => {
+                log::info!(
+                    "Game phase changed to {:?}, time: {}",
+                    phase,
+                    time_remaining
+                );
+                self.set_phase(phase, time_remaining);
             }
             NetworkEvent::PlayerState { id, position, yaw } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
@@ -245,7 +254,7 @@ impl GameState {
                     && victim_id == local_id
                 {
                     self.is_dead = true;
-                    self.killer_id = Some(killer_id);
+                    self.just_died = true;
                     show_death_overlay(killer_id);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
                     // Another player was killed
@@ -256,63 +265,84 @@ impl GameState {
         }
     }
 
-    fn update_coordinates_display(&self) {
+    fn set_phase(&mut self, phase: GamePhase, time_remaining: f32) {
+        let old_phase = self.phase;
+        self.phase = phase;
+        self.phase_timer = time_remaining;
+
+        match phase {
+            GamePhase::WaitingForPlayers => {
+                hide_countdown_overlay();
+                hide_victory_overlay();
+                show_waiting_overlay();
+            }
+            GamePhase::GracePeriod => {
+                // New round starting - reset state
+                if old_phase != GamePhase::GracePeriod {
+                    self.is_dead = false;
+                    self.winner_id = None;
+                    self.pending_kills.clear();
+                    self.respawn_player();
+
+                    // Reset all remote players
+                    for remote in self.remote_players.values_mut() {
+                        remote.is_alive = true;
+                        remote.targeted_time = 0.0;
+                    }
+
+                    hide_death_overlay();
+                    hide_victory_overlay();
+                }
+                hide_waiting_overlay();
+                show_countdown_overlay();
+                update_countdown_display(time_remaining.ceil() as u32);
+            }
+            GamePhase::Playing => {
+                hide_countdown_overlay();
+                hide_waiting_overlay();
+            }
+            GamePhase::Victory => {
+                // Determine winner
+                if !self.is_dead {
+                    self.winner_id = self.local_peer_id;
+                } else {
+                    self.winner_id = self
+                        .remote_players
+                        .iter()
+                        .find(|(_, p)| p.is_alive)
+                        .map(|(&id, _)| id);
+                }
+
+                let is_local_winner =
+                    self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
+                show_victory_overlay(self.winner_id, is_local_winner);
+            }
+        }
+    }
+
+    fn update_hud_display(&self) {
         let pos = self.player.position;
         if let Some(doc) = web_sys::window().and_then(|w| w.document())
             && let Some(e) = doc.get_element_by_id("local-pos")
         {
             e.set_text_content(Some(&format!("[{:.1}, {:.1}, {:.1}]", pos.x, pos.y, pos.z)));
         }
-    }
 
-    fn update_team_counts_display(&self) {
-        let mut team_a = 0;
-        let mut team_b = 0;
-
-        if let Some(team) = self.local_team {
-            match team {
-                Team::A => team_a += 1,
-                Team::B => team_b += 1,
-            }
-        }
-
-        for remote in self.remote_players.values() {
-            match remote.team {
-                Team::A => team_a += 1,
-                Team::B => team_b += 1,
-            }
-        }
-
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(e) = doc.get_element_by_id("team-a-count") {
-                e.set_text_content(Some(&team_a.to_string()));
-            }
-            if let Some(e) = doc.get_element_by_id("team-b-count") {
-                e.set_text_content(Some(&team_b.to_string()));
-            }
+        // Update countdown timer during grace period
+        if self.phase == GamePhase::GracePeriod {
+            update_countdown_display(self.phase_timer.ceil() as u32);
         }
     }
 
-    /// Handle local player death timer and respawn
-    pub fn update_death(&mut self, dt: f32) {
-        if !self.is_dead {
-            return;
-        }
+    fn update_player_count_display(&self) {
+        let total = 1 + self.remote_players.len();
+        let alive = if self.is_dead { 0 } else { 1 }
+            + self.remote_players.values().filter(|p| p.is_alive).count();
 
-        // Use dead_time tracking - we'll reuse a simple approach
-        // The death overlay is shown, wait for RESPAWN_DELAY then respawn
-        static mut DEATH_TIMER: f32 = 0.0;
-
-        unsafe {
-            DEATH_TIMER += dt;
-            if DEATH_TIMER >= RESPAWN_DELAY {
-                DEATH_TIMER = 0.0;
-                self.is_dead = false;
-                self.killer_id = None;
-                hide_death_overlay();
-                self.respawn_player();
-                log::info!("Respawned after death!");
-            }
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Some(e) = doc.get_element_by_id("player-count")
+        {
+            e.set_text_content(Some(&format!("{} / {}", alive, total)));
         }
     }
 }
@@ -331,6 +361,76 @@ fn show_death_overlay(killer_id: PeerId) {
 fn hide_death_overlay() {
     if let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(overlay) = doc.get_element_by_id("death-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
+    }
+}
+
+fn show_countdown_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("countdown-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: flex;");
+    }
+}
+
+fn hide_countdown_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("countdown-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
+    }
+}
+
+fn update_countdown_display(seconds: u32) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(e) = doc.get_element_by_id("countdown-timer")
+    {
+        e.set_text_content(Some(&seconds.to_string()));
+    }
+}
+
+fn show_waiting_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: flex;");
+    }
+}
+
+fn hide_waiting_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("waiting-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
+    }
+}
+
+fn show_victory_overlay(winner_id: Option<PeerId>, is_local_winner: bool) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(overlay) = doc.get_element_by_id("victory-overlay") {
+            let _ = overlay.set_attribute("style", "display: flex;");
+        }
+        if let Some(title) = doc.get_element_by_id("victory-title") {
+            if is_local_winner {
+                title.set_text_content(Some("VICTORY!"));
+            } else {
+                title.set_text_content(Some("DEFEATED"));
+            }
+        }
+        if let Some(winner_elem) = doc.get_element_by_id("winner-id") {
+            if let Some(id) = winner_id {
+                winner_elem.set_text_content(Some(&format!("Player {} wins!", id)));
+            } else {
+                winner_elem.set_text_content(Some("Draw!"));
+            }
+        }
+    }
+}
+
+fn hide_victory_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("victory-overlay")
     {
         let _ = overlay.set_attribute("style", "display: none;");
     }
