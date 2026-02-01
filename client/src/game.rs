@@ -25,6 +25,8 @@ pub struct GameState {
     local_peer_id: Option<PeerId>,
     just_died: bool,
     pub time: f32,
+    /// Time when the mask was last changed (for mask change animation)
+    pub mask_change_time: Option<f32>,
 }
 
 impl GameState {
@@ -71,6 +73,7 @@ impl GameState {
             local_peer_id: None,
             just_died: false,
             time: 0.0,
+            mask_change_time: None,
         }
     }
 
@@ -164,6 +167,8 @@ impl GameState {
     }
 
     fn update_mask_input(&mut self, input: &mut InputState) {
+        let old_mask = self.player.mask;
+
         if input.just_pressed(KeyCode::Digit1) {
             self.player.set_mask(MaskType::Ghost);
         }
@@ -182,6 +187,11 @@ impl GameState {
             self.player.cycle_mask_next();
         } else if scroll < 0.0 {
             self.player.cycle_mask_prev();
+        }
+
+        // Trigger mask change animation if mask changed
+        if self.player.mask != old_mask {
+            self.mask_change_time = Some(self.time);
         }
     }
 

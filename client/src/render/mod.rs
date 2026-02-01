@@ -10,6 +10,7 @@ use crate::mesh::Mesh;
 
 const EMBEDDED_PLAYER: &[u8] = include_bytes!("../../assets/player.glb");
 const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
+const EMBEDDED_MASK: &[u8] = include_bytes!("../../assets/mask.glb");
 
 pub mod camera;
 pub mod cone;
@@ -18,6 +19,7 @@ pub mod map;
 pub mod player;
 pub mod postprocess;
 pub mod traits;
+pub mod view_mask;
 
 use camera::CameraState;
 use cone::ConeRenderer;
@@ -26,6 +28,7 @@ use map::MapRenderer;
 use player::PlayerRenderer;
 use postprocess::{PostProcessApplyParams, PostProcessor};
 use traits::Renderable;
+use view_mask::{MASK_ANIM_DURATION, ViewMaskRenderer};
 
 use crate::player::MaskType;
 
@@ -106,6 +109,7 @@ pub struct Renderer {
     cone_renderer: ConeRenderer,
     postprocessor: PostProcessor,
     hud_renderer: HudRenderer,
+    view_mask_renderer: ViewMaskRenderer,
 }
 
 impl Renderer {
@@ -156,6 +160,13 @@ impl Renderer {
 
         let hud_renderer = HudRenderer::new(&ctx.device, ctx.config.format);
 
+        // Load mask model; render in view space (relative to camera)
+        let mut mask_mesh = load_mesh_from_bytes(EMBEDDED_MASK).expect("Failed to load view mask");
+        mask_mesh.rotate_y_180();
+        mask_mesh.rescale(20.0);
+        mask_mesh.translate(0.0, -3.0, 0.0);
+        let view_mask_renderer = ViewMaskRenderer::new(&ctx.device, ctx.config.format, &mask_mesh);
+
         Self {
             ctx,
             camera,
@@ -165,6 +176,7 @@ impl Renderer {
             cone_renderer,
             postprocessor,
             hud_renderer,
+            view_mask_renderer,
         }
     }
 
@@ -317,6 +329,21 @@ impl Renderer {
                 &self.camera.bind_group,
                 &hunter_cones,
             );
+
+            // Mask animation on mask change (plays once)
+            if let Some(change_time) = game.mask_change_time {
+                let elapsed = game.time - change_time;
+                if elapsed < MASK_ANIM_DURATION {
+                    let progress = elapsed / MASK_ANIM_DURATION;
+                    self.view_mask_renderer.render(
+                        &mut pass,
+                        &self.ctx.queue,
+                        projection,
+                        progress,
+                        game.player.mask as u8,
+                    );
+                }
+            }
         }
 
         self.postprocessor.apply(

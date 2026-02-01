@@ -116,4 +116,16 @@ impl Mesh {
             }
         }
     }
+
+    /// Translate all vertices by the given offset
+    #[allow(dead_code)]
+    pub fn translate(&mut self, dx: f32, dy: f32, dz: f32) {
+        for submesh in &mut self.submeshes {
+            for v in &mut submesh.vertices {
+                v.position[0] += dx;
+                v.position[1] += dy;
+                v.position[2] += dz;
+            }
+        }
+    }
 }
