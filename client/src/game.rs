@@ -1,5 +1,5 @@
 use base64::Engine;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use rand::Rng;
 use std::collections::HashMap;
 use web_time::Instant;
@@ -12,6 +12,35 @@ use crate::mesh::Mesh;
 use crate::network::{GamePhase, NetworkEvent, PeerId};
 use crate::player::{MaskType, Player, RemotePlayer};
 use winit::keyboard::KeyCode;
+
+/// A death location with position and random tilt rotation
+pub struct DeathMarker {
+    pub position: Vec3,
+    /// Rotation around X axis (pitch tilt)
+    pub rot_x: f32,
+    /// Rotation around Z axis (roll tilt)
+    pub rot_z: f32,
+}
+
+impl DeathMarker {
+    /// Create a new death marker with random tilt (up to 20 degrees on X and Z axes)
+    pub fn new(position: Vec3) -> Self {
+        let max_tilt = 20.0_f32.to_radians();
+        let mut rng = rand::rng();
+        Self {
+            position,
+            rot_x: rng.random_range(-max_tilt..max_tilt),
+            rot_z: rng.random_range(-max_tilt..max_tilt),
+        }
+    }
+
+    /// Get the model matrix for this death marker
+    pub fn model_matrix(&self) -> Mat4 {
+        Mat4::from_translation(self.position)
+            * Mat4::from_rotation_x(self.rot_x)
+            * Mat4::from_rotation_z(self.rot_z)
+    }
+}
 
 pub struct GameState {
     pub player: Player,
@@ -31,7 +60,7 @@ pub struct GameState {
     /// Time when the mask was last changed (for mask change animation)
     pub mask_change_time: Option<f32>,
     /// Locations where players have died (persists across rounds)
-    pub death_locations: Vec<Vec3>,
+    pub death_locations: Vec<DeathMarker>,
 }
 
 impl GameState {
@@ -266,6 +295,8 @@ impl GameState {
                 if can_kill {
                     remote.targeted_time += dt;
                     if remote.targeted_time >= kill_duration {
+                        // Record death location for tombstone
+                        self.death_locations.push(DeathMarker::new(remote.position));
                         remote.is_alive = false;
                         remote.targeted_time = 0.0;
                         new_kills.push(peer_id);
@@ -415,14 +446,15 @@ impl GameState {
                     && victim_id == local_id
                 {
                     // Record death location before marking as dead
-                    self.death_locations.push(self.player.position);
+                    self.death_locations
+                        .push(DeathMarker::new(self.player.position));
                     self.is_dead = true;
                     self.just_died = true;
                     self.pending_death_sounds += 1;
                     show_death_overlay(killer_id);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
                     // Record death location
-                    self.death_locations.push(remote.position);
+                    self.death_locations.push(DeathMarker::new(remote.position));
                     // Another player was killed (not by us - our kills already triggered sound)
                     remote.is_alive = false;
                     remote.targeted_time = 0.0;

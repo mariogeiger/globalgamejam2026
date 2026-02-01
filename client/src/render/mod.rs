@@ -292,13 +292,7 @@ impl Renderer {
             let dead_players: Vec<_> = game
                 .death_locations
                 .iter()
-                .map(|&pos| {
-                    (
-                        Mat4::from_translation(pos),
-                        [1.0, 1.0, 1.0, 1.0_f32],
-                        Vec3::ZERO,
-                    )
-                })
+                .map(|marker| (marker.model_matrix(), [1.0, 1.0, 1.0, 1.0_f32], Vec3::ZERO))
                 .collect();
 
             self.player_renderer.render(
