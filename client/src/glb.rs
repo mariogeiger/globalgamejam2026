@@ -10,7 +10,11 @@ pub const SPAWNS_TEAM_A: &[[f32; 3]] = &[
     [-277.4, -127.0, 2204.3],
 ];
 
-pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[[-483.5, -127.4, 2188.0], [24.6, -127.4, 2129.9]];
+pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
+    [299.0, 0.0, 498.4],
+    [657.3, 0.0, 412.4],
+    [-58.9, 0.0, 347.5],
+];
 
 pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
     let (document, buffers, images) =
