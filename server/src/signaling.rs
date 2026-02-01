@@ -7,12 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Team {
-    A,
-    B,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 enum ClientMessage {
@@ -49,14 +43,12 @@ enum ServerMessage {
     Welcome {
         #[serde(rename = "clientId")]
         client_id: ClientId,
-        team: Team,
         peers: Vec<PeerInfo>,
     },
     #[serde(rename = "peer-joined")]
     PeerJoined {
         #[serde(rename = "peerId")]
         peer_id: ClientId,
-        team: Team,
     },
     #[serde(rename = "peer-left")]
     PeerLeft {
@@ -90,14 +82,12 @@ enum ServerMessage {
 #[derive(Serialize, Debug, Clone)]
 struct PeerInfo {
     id: ClientId,
-    team: Team,
 }
 
 type ClientId = u64;
 type ClientSender = mpsc::UnboundedSender<String>;
 
 struct ClientInfo {
-    team: Team,
     sender: ClientSender,
 }
 
@@ -111,16 +101,6 @@ impl SignalingState {
         Self {
             next_id: 0,
             clients: HashMap::new(),
-        }
-    }
-
-    fn assign_team(&self) -> Team {
-        let team_a_count = self.clients.values().filter(|c| c.team == Team::A).count();
-        let team_b_count = self.clients.values().filter(|c| c.team == Team::B).count();
-        if team_a_count <= team_b_count {
-            Team::A
-        } else {
-            Team::B
         }
     }
 }
@@ -192,31 +172,17 @@ async fn handle_message(
         ClientMessage::Join => {
             let mut s = state.lock().await;
 
-            // Assign team (balance teams)
-            let team = s.assign_team();
-
             // Get list of existing peers
-            let peers: Vec<PeerInfo> = s
-                .clients
-                .iter()
-                .map(|(&id, info)| PeerInfo {
-                    id,
-                    team: info.team,
-                })
-                .collect();
+            let peers: Vec<PeerInfo> = s.clients.iter().map(|(&id, _)| PeerInfo { id }).collect();
 
             log::info!(
-                "Client {} joined as Team {:?}, {} existing peers",
+                "Client {} joined, {} existing peers",
                 client_id,
-                team,
                 peers.len()
             );
 
             // Broadcast peer-joined to all existing clients
-            let peer_joined = ServerMessage::PeerJoined {
-                peer_id: client_id,
-                team,
-            };
+            let peer_joined = ServerMessage::PeerJoined { peer_id: client_id };
             if let Ok(json) = serde_json::to_string(&peer_joined) {
                 for info in s.clients.values() {
                     let _ = info.sender.send(json.clone());
@@ -227,17 +193,12 @@ async fn handle_message(
             s.clients.insert(
                 client_id,
                 ClientInfo {
-                    team,
                     sender: sender.clone(),
                 },
             );
 
             // Send welcome message to the new client
-            let welcome = ServerMessage::Welcome {
-                client_id,
-                team,
-                peers,
-            };
+            let welcome = ServerMessage::Welcome { client_id, peers };
             if let Ok(json) = serde_json::to_string(&welcome) {
                 let _ = sender.send(json);
             }

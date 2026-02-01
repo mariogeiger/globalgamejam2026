@@ -1,10 +1,8 @@
 use glam::{Mat4, Vec3};
-use rand::Rng;
 use winit::keyboard::KeyCode;
 
 use crate::config::*;
 use crate::input::InputState;
-use crate::team::Team;
 
 pub struct Player {
     pub position: Vec3,
@@ -111,36 +109,18 @@ impl Player {
 pub struct RemotePlayer {
     pub position: Vec3,
     pub yaw: f32,
-    pub team: Team,
     pub is_alive: bool,
     pub targeted_time: f32,
-    pub dead_time: f32,
 }
 
 impl RemotePlayer {
-    pub fn new(team: Team) -> Self {
-        let spawns = team.spawn_points();
-        let idx = rand::rng().random_range(0..spawns.len());
-        let spawn = spawns[idx];
-
+    pub fn new() -> Self {
         Self {
-            position: Vec3::new(spawn[0], spawn[1], spawn[2]),
+            position: Vec3::ZERO,
             yaw: 0.0,
-            team,
             is_alive: true,
             targeted_time: 0.0,
-            dead_time: 0.0,
         }
-    }
-
-    pub fn respawn(&mut self) {
-        let spawns = self.team.spawn_points();
-        let idx = rand::rng().random_range(0..spawns.len());
-        let spawn = spawns[idx];
-        self.position = Vec3::new(spawn[0], spawn[1], spawn[2]);
-        self.is_alive = true;
-        self.targeted_time = 0.0;
-        self.dead_time = 0.0;
     }
 
     pub fn model_matrix(&self) -> Mat4 {

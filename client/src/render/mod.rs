@@ -216,7 +216,7 @@ impl Renderer {
                 .values()
                 .map(|remote| {
                     let color = if remote.is_alive {
-                        remote.team.color()
+                        [1.0, 0.3, 0.2, 1.0] // All enemies are red
                     } else {
                         [0.1, 0.1, 0.1, 1.0]
                     };

@@ -11,16 +11,15 @@ use web_sys::{
     RtcSessionDescriptionInit, Url, WebSocket,
 };
 
-use crate::team::Team;
-
 pub type PeerId = u64;
 
 #[derive(Clone, Debug)]
 pub enum NetworkEvent {
-    TeamAssigned(Team),
+    Connected {
+        id: PeerId,
+    },
     PeerJoined {
         id: PeerId,
-        team: Team,
     },
     PeerLeft {
         id: PeerId,
@@ -68,7 +67,6 @@ enum EventMessage {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PeerInfo {
     id: PeerId,
-    team: Team,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -78,14 +76,12 @@ enum ServerMessage {
     Welcome {
         #[serde(rename = "clientId")]
         client_id: PeerId,
-        team: Team,
         peers: Vec<PeerInfo>,
     },
     #[serde(rename = "peer-joined")]
     PeerJoined {
         #[serde(rename = "peerId")]
         peer_id: PeerId,
-        team: Team,
     },
     #[serde(rename = "peer-left")]
     PeerLeft {
@@ -123,7 +119,6 @@ struct PeerConnection {
     state_channel: Option<RtcDataChannel>,
     /// Reliable channel for game events (kills)
     events_channel: Option<RtcDataChannel>,
-    team: Team,
     pending_candidates: Vec<IceCandidateData>,
 }
 
@@ -136,9 +131,7 @@ struct IceCandidateData {
 
 #[derive(Default)]
 struct RtcState {
-    #[allow(dead_code)]
     local_id: Option<PeerId>,
-    local_team: Option<Team>,
     peers: HashMap<PeerId, PeerConnection>,
     pending_events: Vec<NetworkEvent>,
 }
@@ -225,7 +218,7 @@ impl NetworkClient {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.state.borrow().local_team.is_some()
+        self.state.borrow().local_id.is_some()
     }
 }
 
@@ -269,31 +262,21 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
 
     wasm_bindgen_futures::spawn_local(async move {
         match msg {
-            ServerMessage::Welcome {
-                client_id,
-                team,
-                peers,
-            } => {
+            ServerMessage::Welcome { client_id, peers } => {
                 log::info!(
-                    "Welcome! I am client {} on team {:?}, {} peers in game",
+                    "Welcome! I am client {}, {} peers in game",
                     client_id,
-                    team,
                     peers.len()
                 );
 
                 {
                     let mut s = state.borrow_mut();
                     s.local_id = Some(client_id);
-                    s.local_team = Some(team);
-                    s.pending_events.push(NetworkEvent::TeamAssigned(team));
+                    s.pending_events
+                        .push(NetworkEvent::Connected { id: client_id });
                 }
 
-                let status = format!(
-                    "You are Team {} ({}). {} other player(s) in game.",
-                    if team == Team::A { "A" } else { "B" },
-                    if team == Team::A { "Blue" } else { "Red" },
-                    peers.len()
-                );
+                let status = format!("Connected! {} other player(s) in game.", peers.len());
                 update_status(&status);
 
                 for peer_info in peers {
@@ -318,14 +301,11 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                                     pc: pc.clone(),
                                     state_channel: Some(state_dc),
                                     events_channel: Some(events_dc),
-                                    team: peer_info.team,
                                     pending_candidates: Vec::new(),
                                 },
                             );
-                            s.pending_events.push(NetworkEvent::PeerJoined {
-                                id: peer_info.id,
-                                team: peer_info.team,
-                            });
+                            s.pending_events
+                                .push(NetworkEvent::PeerJoined { id: peer_info.id });
                         }
 
                         if let Ok(offer) =
@@ -344,8 +324,8 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     }
                 }
             }
-            ServerMessage::PeerJoined { peer_id, team } => {
-                log::info!("Peer {} joined on team {:?}", peer_id, team);
+            ServerMessage::PeerJoined { peer_id } => {
+                log::info!("Peer {} joined", peer_id);
 
                 if let Ok(pc) = create_peer_connection(&ws, &state, peer_id) {
                     let mut s = state.borrow_mut();
@@ -355,12 +335,11 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                             pc,
                             state_channel: None,
                             events_channel: None,
-                            team,
                             pending_candidates: Vec::new(),
                         },
                     );
                     s.pending_events
-                        .push(NetworkEvent::PeerJoined { id: peer_id, team });
+                        .push(NetworkEvent::PeerJoined { id: peer_id });
                 }
                 update_peer_count(&state);
             }

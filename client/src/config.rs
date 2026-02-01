@@ -24,7 +24,10 @@ pub const RESPAWN_MARGIN: f32 = 500.0;
 // Targeting system
 pub const TARGETING_ANGLE: f32 = 60.0;
 pub const TARGETING_DURATION: f32 = 1.0;
-pub const RESPAWN_DELAY: f32 = 10.0;
+
+// Game phases
+pub const COUNTDOWN_DURATION: f32 = 10.0;
+pub const VICTORY_DURATION: f32 = 10.0;
 
 // Debug options
 pub const DEBUG_MANNEQUINS: bool = cfg!(debug_assertions);

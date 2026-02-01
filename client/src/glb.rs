@@ -4,13 +4,10 @@ use std::collections::HashMap;
 
 use crate::map::{LoadedMap, MapMesh, MapVertex, TextureData};
 
-pub const SPAWNS_TEAM_A: &[[f32; 3]] = &[
+pub const SPAWN_POINTS: &[[f32; 3]] = &[
     [-408.5, -127.0, 2414.2],
     [-196.2, -127.0, 2417.7],
     [-277.4, -127.0, 2204.3],
-];
-
-pub const SPAWNS_TEAM_B: &[[f32; 3]] = &[
     [299.0, 0.0, 498.4],
     [657.3, 0.0, 412.4],
     [-58.9, 0.0, 347.5],
@@ -108,9 +105,8 @@ pub fn load_glb_from_bytes(data: &[u8]) -> Result<LoadedMap, String> {
         |(min, max), v| (min.min(*v), max.max(*v)),
     );
 
-    let spawn_points: Vec<Vec3> = SPAWNS_TEAM_A
+    let spawn_points: Vec<Vec3> = SPAWN_POINTS
         .iter()
-        .chain(SPAWNS_TEAM_B.iter())
         .map(|s| Vec3::new(s[0], s[1], s[2]))
         .collect();
 

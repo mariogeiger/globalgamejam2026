@@ -17,7 +17,6 @@ mod map;
 mod network;
 mod player;
 mod render;
-mod team;
 
 use config::DEBUG_MANNEQUINS;
 use game::GameState;
