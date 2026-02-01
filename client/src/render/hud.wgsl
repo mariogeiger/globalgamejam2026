@@ -21,16 +21,12 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    
-    // Position in view space: circle at distance along -Z axis
     let view_pos = vec4<f32>(
         in.position.x * hud.reticle_radius,
         in.position.y * hud.reticle_radius,
         -hud.reticle_distance,
         1.0
     );
-    
-    // Apply projection to get clip space position
     out.clip_position = hud.projection * view_pos;
     out.local_pos = in.position;
     return out;
@@ -39,29 +35,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = length(in.local_pos);
-    
-    if dist > 1.0 {
-        discard;
-    }
-    
-    let ring_outer = 1.0;
-    let ring_inner = 0.85;
-    let ring = smoothstep(ring_inner, ring_inner + 0.05, dist) * smoothstep(ring_outer + 0.05, ring_outer, dist);
-    
-    let fill_amount = hud.targeting_progress;
-    let angle = atan2(in.local_pos.y, in.local_pos.x);
-    let normalized_angle = (angle + 3.14159265) / (2.0 * 3.14159265);
-    let fill = step(normalized_angle, fill_amount) * step(dist, ring_inner);
-    
-    let base_color = vec3<f32>(1.0, 1.0, 1.0);
-    let target_color = vec3<f32>(1.0, 0.3, 0.2);
-    let color = mix(base_color, target_color, hud.has_target);
-    
-    let alpha = max(ring * 0.6, fill * 0.3 * hud.has_target);
-    
-    if alpha < 0.01 {
-        discard;
-    }
-    
+    if dist > 1.0 { discard; }
+
+    let edge = smoothstep(1.0, 0.95, dist);
+    let fill = smoothstep(1.0 - hud.targeting_progress, 1.05 - hud.targeting_progress, dist);
+
+    let color = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(1.0, 0.3, 0.2), fill);
+    let alpha = edge * mix(0.25, 0.5, fill * hud.has_target);
+
+    if alpha < 0.01 { discard; }
     return vec4<f32>(color, alpha);
 }
