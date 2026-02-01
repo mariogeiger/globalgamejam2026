@@ -23,7 +23,7 @@ mod render;
 use assets::EMBEDDED_MAP;
 use audio::Audio;
 use config::{AFK_TIMEOUT_SECONDS, DEBUG_MANNEQUINS};
-use game::GameState;
+use game::{GameState, init_mask_images};
 use glb::load_mesh_from_bytes;
 use input::InputState;
 use mesh::Mesh;
@@ -115,6 +115,7 @@ impl ApplicationHandler for App {
             };
 
             STATE.with(|s| *s.borrow_mut() = Some(state));
+            init_mask_images();
             window_clone.request_redraw();
         });
     }

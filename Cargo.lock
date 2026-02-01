@@ -872,6 +872,7 @@ dependencies = [
 name = "globalgamejam2026"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytemuck",
  "console_log",
  "env_logger",

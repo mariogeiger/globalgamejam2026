@@ -1,8 +1,10 @@
+use base64::Engine;
 use glam::Vec3;
 use rand::Rng;
 use std::collections::HashMap;
 use web_time::Instant;
 
+use crate::assets::{COWARD_IMAGE, GHOST_IMAGE, HUNTER_IMAGE};
 use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
@@ -197,6 +199,7 @@ impl GameState {
         // Trigger mask change animation if mask changed
         if self.player.mask != old_mask {
             self.mask_change_time = Some(self.time);
+            update_mask_selector(self.player.mask);
         }
     }
 
@@ -625,5 +628,53 @@ fn hide_spectating_overlay() {
         && let Some(overlay) = doc.get_element_by_id("spectating-overlay")
     {
         let _ = overlay.set_attribute("style", "display: none;");
+    }
+}
+
+fn update_mask_selector(mask: MaskType) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+
+    let mask_ids = ["mask-ghost", "mask-coward", "mask-hunter"];
+    let active_id = match mask {
+        MaskType::Ghost => "mask-ghost",
+        MaskType::Coward => "mask-coward",
+        MaskType::Hunter => "mask-hunter",
+    };
+
+    for id in mask_ids {
+        if let Some(elem) = doc.get_element_by_id(id) {
+            if id == active_id {
+                let _ = elem.set_attribute("class", "mask-slot active");
+            } else {
+                let _ = elem.set_attribute("class", "mask-slot");
+            }
+        }
+    }
+}
+
+/// Initialize mask selector images with embedded data URLs
+pub fn init_mask_images() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    let masks = [
+        ("mask-ghost", GHOST_IMAGE),
+        ("mask-coward", COWARD_IMAGE),
+        ("mask-hunter", HUNTER_IMAGE),
+    ];
+
+    for (id, image_data) in masks {
+        if let Some(elem) = doc.get_element_by_id(id)
+            && let Some(img) = elem.query_selector("img").ok().flatten()
+        {
+            let b64 = engine.encode(image_data);
+            let data_url = format!("data:image/png;base64,{}", b64);
+            let _ = img.set_attribute("src", &data_url);
+        }
     }
 }

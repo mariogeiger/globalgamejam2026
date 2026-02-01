@@ -202,6 +202,62 @@
         #info-panel .value.disconnected {
             color: #f38ba8;
         }
+        
+        /* Mask selector - bottom left */
+        #mask-selector {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            display: flex;
+            gap: 8px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        .mask-slot {
+            position: relative;
+            width: 64px;
+            height: 64px;
+            background: rgba(30, 30, 46, 0.85);
+            border: 2px solid #45475a;
+            border-radius: 8px;
+            overflow: hidden;
+            transition: all 0.15s ease;
+        }
+        .mask-slot.active {
+            border-color: #f9e2af;
+            box-shadow: 0 0 12px rgba(249, 226, 175, 0.4);
+        }
+        .mask-slot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .mask-slot .key {
+            position: absolute;
+            top: 2px;
+            left: 4px;
+            font-size: 24px;
+            font-weight: bold;
+            color: #cdd6f4;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+        }
+        .mask-slot .name {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            font-size: 9px;
+            font-weight: bold;
+            text-align: center;
+            color: #cdd6f4;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .mask-slot.active .name {
+            color: #f9e2af;
+        }
     </style>
 </head>
 <body>
@@ -238,6 +294,24 @@
         <h2>DISCONNECTED</h2>
         <p>You were disconnected due to inactivity.</p>
         <p class="hint">Refresh the page to reconnect.</p>
+    </div>
+    
+    <div id="mask-selector">
+        <div class="mask-slot active" id="mask-ghost">
+            <span class="key">1</span>
+            <img src="assets/ghost.png" alt="Ghost">
+            <span class="name">Ghost</span>
+        </div>
+        <div class="mask-slot" id="mask-coward">
+            <span class="key">2</span>
+            <img src="assets/coward.png" alt="Coward">
+            <span class="name">Coward</span>
+        </div>
+        <div class="mask-slot" id="mask-hunter">
+            <span class="key">3</span>
+            <img src="assets/hunter.png" alt="Hunter">
+            <span class="name">Hunter</span>
+        </div>
     </div>
     
     <div id="info-panel">
