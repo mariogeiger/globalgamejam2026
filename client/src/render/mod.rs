@@ -152,7 +152,6 @@ impl Renderer {
             ctx.config.format,
             ctx.config.width,
             ctx.config.height,
-            &depth_view,
         );
 
         let hud_renderer = HudRenderer::new(&ctx.device, ctx.config.format);
@@ -180,13 +179,8 @@ impl Renderer {
             let (_, depth_view) = create_depth_texture(&self.ctx.device, width, height);
             self.depth_view = depth_view;
 
-            self.postprocessor.resize(
-                &self.ctx.device,
-                width,
-                height,
-                &self.depth_view,
-                self.ctx.config.format,
-            );
+            self.postprocessor
+                .resize(&self.ctx.device, width, height, self.ctx.config.format);
         }
     }
 
@@ -286,12 +280,10 @@ impl Renderer {
             &self.ctx.queue,
             &swapchain_view,
             PostProcessApplyParams {
-                velocity: game.player.velocity,
-                view_proj,
-                view: game.player.view_matrix(),
                 width: self.ctx.config.width,
                 height: self.ctx.config.height,
                 mask_type: game.player.mask as u8,
+                time: game.time,
             },
         );
 

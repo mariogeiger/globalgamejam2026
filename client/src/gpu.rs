@@ -171,6 +171,7 @@ pub fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
     })
 }
 
+#[allow(dead_code)]
 pub fn depth_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Depth Texture Bind Group Layout"),

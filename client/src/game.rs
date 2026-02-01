@@ -24,6 +24,7 @@ pub struct GameState {
     pending_kills: Vec<PeerId>,
     local_peer_id: Option<PeerId>,
     just_died: bool,
+    pub time: f32,
 }
 
 impl GameState {
@@ -69,6 +70,7 @@ impl GameState {
             pending_kills: Vec::new(),
             local_peer_id: None,
             just_died: false,
+            time: 0.0,
         }
     }
 
@@ -119,6 +121,7 @@ impl GameState {
         let now = Instant::now();
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
+        self.time += dt;
 
         // Update local phase timer for display
         if self.phase_timer > 0.0 {
