@@ -20,6 +20,7 @@ pub enum GamePhase {
     GracePeriod,
     Playing,
     Victory,
+    Spectating,
 }
 
 #[derive(Clone, Debug)]

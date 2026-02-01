@@ -125,8 +125,11 @@ impl GameState {
 
         self.update_hud_display();
 
-        // Don't process movement while dead or in victory phase
-        if self.is_dead || self.phase == GamePhase::Victory {
+        // Spectator mode: when dead, during victory, or waiting to join mid-game
+        let is_spectator =
+            self.is_dead || self.phase == GamePhase::Victory || self.phase == GamePhase::Spectating;
+        if is_spectator {
+            self.player.spectator_update(dt, input);
             return;
         }
 
@@ -269,11 +272,21 @@ impl GameState {
                     phase_time_remaining
                 );
                 self.local_peer_id = Some(id);
-                self.set_phase(phase, phase_time_remaining);
+                // If joining mid-game, become spectator instead of playing
+                let actual_phase = if phase == GamePhase::Playing {
+                    log::info!("Joined mid-game, entering spectator mode");
+                    GamePhase::Spectating
+                } else {
+                    phase
+                };
+                self.set_phase(actual_phase, phase_time_remaining);
                 self.update_player_count_display();
             }
             NetworkEvent::PeerJoined { id } => {
                 log::info!("Peer {} joined", id);
+                // Remove mannequins when a real player connects
+                self.remote_players.remove(&u64::MAX);
+                self.remote_players.remove(&(u64::MAX - 1));
                 let remote = RemotePlayer::new();
                 self.remote_players.insert(id, remote);
                 self.update_player_count_display();
@@ -292,7 +305,14 @@ impl GameState {
                     phase,
                     time_remaining
                 );
-                self.set_phase(phase, time_remaining);
+                // Stay spectating until new round (GracePeriod) starts
+                let actual_phase =
+                    if self.phase == GamePhase::Spectating && phase == GamePhase::Playing {
+                        GamePhase::Spectating
+                    } else {
+                        phase
+                    };
+                self.set_phase(actual_phase, time_remaining);
             }
             NetworkEvent::PlayerState { id, position, yaw } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
@@ -331,6 +351,7 @@ impl GameState {
             GamePhase::WaitingForPlayers => {
                 hide_countdown_overlay();
                 hide_victory_overlay();
+                hide_spectating_overlay();
                 show_waiting_overlay();
             }
             GamePhase::GracePeriod => {
@@ -349,6 +370,7 @@ impl GameState {
 
                     hide_death_overlay();
                     hide_victory_overlay();
+                    hide_spectating_overlay();
                 }
                 hide_waiting_overlay();
                 show_countdown_overlay();
@@ -357,6 +379,7 @@ impl GameState {
             GamePhase::Playing => {
                 hide_countdown_overlay();
                 hide_waiting_overlay();
+                hide_spectating_overlay();
             }
             GamePhase::Victory => {
                 // Determine winner
@@ -373,6 +396,13 @@ impl GameState {
                 let is_local_winner =
                     self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
                 show_victory_overlay(self.winner_id, is_local_winner);
+            }
+            GamePhase::Spectating => {
+                // Joined mid-game, show spectating message
+                hide_countdown_overlay();
+                hide_victory_overlay();
+                hide_death_overlay();
+                show_spectating_overlay();
             }
         }
     }
@@ -488,6 +518,22 @@ fn show_victory_overlay(winner_id: Option<PeerId>, is_local_winner: bool) {
 fn hide_victory_overlay() {
     if let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(overlay) = doc.get_element_by_id("victory-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
+    }
+}
+
+fn show_spectating_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("spectating-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: block;");
+    }
+}
+
+fn hide_spectating_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("spectating-overlay")
     {
         let _ = overlay.set_attribute("style", "display: none;");
     }

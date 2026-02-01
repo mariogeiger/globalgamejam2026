@@ -183,6 +183,23 @@
             animation: pulse 1.5s ease-in-out infinite;
         }
         
+        #spectating-overlay {
+            background: rgba(30, 30, 46, 0.95);
+            border: 2px solid #cba6f7;
+        }
+        #spectating-overlay h2 {
+            font-size: 20px;
+            font-weight: bold;
+            color: #cba6f7;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+        #spectating-overlay p {
+            font-size: 14px;
+            color: #a6adc8;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
         @keyframes pulse {
             0%, 100% { opacity: 0.5; }
             50% { opacity: 1; }
@@ -234,6 +251,11 @@
         <h2 id="victory-title">VICTORY!</h2>
         <p id="winner-id">You are the last one standing!</p>
         <p class="restart-hint">Restarting...</p>
+    </div>
+    
+    <div id="spectating-overlay" class="game-status-box">
+        <h2>SPECTATING</h2>
+        <p>Game in progress. Waiting for next round...</p>
     </div>
     
     <div id="connection-status">Connecting to server...</div>

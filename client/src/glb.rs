@@ -3,14 +3,8 @@ use std::collections::HashMap;
 
 use crate::mesh::{Mesh, SubMesh, TextureData, Vertex};
 
-/// Coordinate transform function type
-pub type CoordTransform = fn([f32; 3]) -> [f32; 3];
-
-/// Load a mesh from GLB bytes with optional coordinate transform
-pub fn load_mesh_from_bytes(
-    data: &[u8],
-    transform: Option<CoordTransform>,
-) -> Result<Mesh, String> {
+/// Load a mesh from GLB bytes
+pub fn load_mesh_from_bytes(data: &[u8]) -> Result<Mesh, String> {
     let (document, buffers, images) =
         gltf::import_slice(data).map_err(|e| format!("Failed to load GLB: {}", e))?;
 
@@ -60,16 +54,10 @@ pub fn load_mesh_from_bytes(
                 .iter()
                 .zip(&tex_coords)
                 .zip(&normals)
-                .map(|((pos, tex), norm)| {
-                    let (position, normal) = match transform {
-                        Some(f) => (f(*pos), f(*norm)),
-                        None => (*pos, *norm),
-                    };
-                    Vertex {
-                        position,
-                        tex_coord: *tex,
-                        normal,
-                    }
+                .map(|((pos, tex), norm)| Vertex {
+                    position: *pos,
+                    tex_coord: *tex,
+                    normal: *norm,
                 })
                 .collect();
 
@@ -95,10 +83,9 @@ pub fn load_mesh_from_bytes(
     }
 
     log::info!(
-        "Loaded mesh: {} submeshes, {} textures, transform: {}",
+        "Loaded mesh: {} submeshes, {} textures",
         submeshes.len(),
-        textures.len(),
-        transform.is_some()
+        textures.len()
     );
 
     Ok(Mesh {
