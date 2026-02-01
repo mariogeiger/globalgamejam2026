@@ -79,6 +79,7 @@ impl Mesh {
     }
 
     /// Uniformly rescale all vertex positions by the given factor
+    #[allow(dead_code)]
     pub fn rescale(&mut self, factor: f32) {
         for submesh in &mut self.submeshes {
             for v in &mut submesh.vertices {
@@ -90,6 +91,7 @@ impl Mesh {
     }
 
     /// Rotate all vertices and normals 180 degrees around the Y axis
+    #[allow(dead_code)]
     pub fn rotate_y_180(&mut self) {
         for submesh in &mut self.submeshes {
             for v in &mut submesh.vertices {
@@ -103,6 +105,7 @@ impl Mesh {
     }
 
     /// Rotate all vertices and normals 180 degrees around the Z axis (negate X and Y)
+    #[allow(dead_code)]
     pub fn rotate_z_180(&mut self) {
         for submesh in &mut self.submeshes {
             for v in &mut submesh.vertices {

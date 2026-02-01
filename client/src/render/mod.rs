@@ -123,7 +123,7 @@ impl Renderer {
 
         // Load player model, rotate 180° and scale to PLAYER_HEIGHT
         let mut player_mesh = load_mesh_from_bytes(EMBEDDED_PLAYER).expect("Failed to load player");
-        player_mesh.rotate_y_180();
+        // player_mesh.rotate_y_180();
         player_mesh.rescale(PLAYER_HEIGHT / player_mesh.bounding_box().height());
 
         // Load tombstone model and scale up 100x
