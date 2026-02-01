@@ -120,6 +120,12 @@ impl Player {
         if self.on_ground && input.is_pressed(KeyCode::Space) {
             self.velocity.y = JUMP_VELOCITY;
             self.on_ground = false;
+
+            // Coward gets a directional jump boost
+            if self.mask == MaskType::Coward && move_dir != Vec3::ZERO {
+                self.velocity.x += move_dir.x * COWARD_JUMP_BOOST;
+                self.velocity.z += move_dir.z * COWARD_JUMP_BOOST;
+            }
         }
 
         if !self.on_ground {

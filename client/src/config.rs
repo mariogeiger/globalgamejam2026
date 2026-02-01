@@ -35,6 +35,7 @@ pub const TARGETING_DURATION: f32 = 1.0;
 
 // Mask system
 pub const COWARD_SPEED_MULTIPLIER: f32 = 1.5;
+pub const COWARD_JUMP_BOOST: f32 = 10000.0; // Horizontal velocity boost 
 pub const HUNTER_KILL_DURATION: f32 = 0.7;
 pub const HUNTER_CONE_LENGTH: f32 = 5000.0;
 pub const HUNTER_CONE_ALPHA: f32 = 0.3;
