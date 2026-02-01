@@ -121,14 +121,14 @@ impl Renderer {
             map_mesh,
         );
 
-        // Load player model and scale to PLAYER_HEIGHT
-        let mut player_mesh =
-            load_mesh_from_bytes(EMBEDDED_PLAYER, None).expect("Failed to load player");
+        // Load player model, rotate 180° and scale to PLAYER_HEIGHT
+        let mut player_mesh = load_mesh_from_bytes(EMBEDDED_PLAYER).expect("Failed to load player");
+        player_mesh.rotate_y_180();
         player_mesh.rescale(PLAYER_HEIGHT / player_mesh.bounding_box().height());
 
         // Load tombstone model and scale up 100x
         let mut tombstone_mesh =
-            load_mesh_from_bytes(EMBEDDED_TOMBSTONE, None).expect("Failed to load tombstone");
+            load_mesh_from_bytes(EMBEDDED_TOMBSTONE).expect("Failed to load tombstone");
         tombstone_mesh.rescale(100.0);
 
         let player_renderer = PlayerRenderer::new(

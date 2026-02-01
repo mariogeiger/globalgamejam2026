@@ -43,8 +43,8 @@ struct App {
 impl App {
     fn new() -> Self {
         // Load map with coordinate transform (rotate 180° around Z)
-        let map_mesh = load_mesh_from_bytes(EMBEDDED_MAP, Some(|p| [-p[0], -p[1], p[2]]))
-            .expect("Failed to load map");
+        let mut map_mesh = load_mesh_from_bytes(EMBEDDED_MAP).expect("Failed to load map");
+        map_mesh.rotate_z_180();
         log::info!(
             "Loaded map: {} submeshes, {} textures",
             map_mesh.submeshes.len(),

@@ -88,4 +88,29 @@ impl Mesh {
             }
         }
     }
+
+    /// Rotate all vertices and normals 180 degrees around the Y axis
+    pub fn rotate_y_180(&mut self) {
+        for submesh in &mut self.submeshes {
+            for v in &mut submesh.vertices {
+                // 180 deg rotation: negate X and Z
+                v.position[0] = -v.position[0];
+                v.position[2] = -v.position[2];
+                v.normal[0] = -v.normal[0];
+                v.normal[2] = -v.normal[2];
+            }
+        }
+    }
+
+    /// Rotate all vertices and normals 180 degrees around the Z axis (negate X and Y)
+    pub fn rotate_z_180(&mut self) {
+        for submesh in &mut self.submeshes {
+            for v in &mut submesh.vertices {
+                v.position[0] = -v.position[0];
+                v.position[1] = -v.position[1];
+                v.normal[0] = -v.normal[0];
+                v.normal[1] = -v.normal[1];
+            }
+        }
+    }
 }
