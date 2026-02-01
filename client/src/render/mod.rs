@@ -17,7 +17,7 @@ use camera::CameraState;
 use hud::HudRenderer;
 use map::MapRenderer;
 use player::PlayerRenderer;
-use postprocess::PostProcessor;
+use postprocess::{PostProcessApplyParams, PostProcessor};
 use traits::Renderable;
 
 pub struct RenderContext {
@@ -237,9 +237,13 @@ impl Renderer {
             &mut encoder,
             &self.ctx.queue,
             &swapchain_view,
-            game.player.velocity,
-            self.ctx.config.width,
-            self.ctx.config.height,
+            PostProcessApplyParams {
+                velocity: game.player.velocity,
+                view_proj,
+                view: game.player.view_matrix(),
+                width: self.ctx.config.width,
+                height: self.ctx.config.height,
+            },
         );
 
         {

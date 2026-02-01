@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Mat4;
 
 use crate::gpu::{
     create_render_target_texture, create_uniform_buffer, create_vertex_buffer,
@@ -14,6 +15,19 @@ pub struct PostProcessUniform {
     pub resolution: [f32; 2],
     pub depth_near: f32,
     pub depth_far: f32,
+    /// Inverse view-projection for reconstructing world position from depth.
+    pub inv_view_proj: [[f32; 4]; 4],
+    /// View matrix (world -> camera space) for screen_space_position.
+    pub view: [[f32; 4]; 4],
+}
+
+/// Parameters for a single postprocess apply call (avoids too many arguments).
+pub struct PostProcessApplyParams {
+    pub velocity: glam::Vec3,
+    pub view_proj: Mat4,
+    pub view: Mat4,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[repr(C)]
@@ -227,6 +241,8 @@ impl PostProcessor {
             resolution: [width as f32, height as f32],
             depth_near: 1.0,
             depth_far: 10000.0,
+            inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+            view: Mat4::IDENTITY.to_cols_array_2d(),
         };
         let uniform_buffer = create_uniform_buffer(device, &uniform, "Postprocess Uniform");
 
@@ -485,11 +501,9 @@ impl PostProcessor {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         swapchain_view: &wgpu::TextureView,
-        velocity: glam::Vec3,
-        width: u32,
-        height: u32,
+        params: PostProcessApplyParams,
     ) {
-        let vel_xz = glam::Vec2::new(velocity.x, velocity.z);
+        let vel_xz = glam::Vec2::new(params.velocity.x, params.velocity.z);
         let speed = vel_xz.length();
         let (blur_direction, blur_strength) = if speed > 1.0 {
             let dir = vel_xz.normalize();
@@ -508,9 +522,11 @@ impl PostProcessor {
                 blur_direction,
                 blur_strength,
                 smear_factor,
-                resolution: [width as f32, height as f32],
+                resolution: [params.width as f32, params.height as f32],
                 depth_near: 1.0,
                 depth_far: 10000.0,
+                inv_view_proj: params.view_proj.inverse().to_cols_array_2d(),
+                view: params.view.to_cols_array_2d(),
             }]),
         );
 
