@@ -28,6 +28,8 @@ pub struct GameState {
     pub time: f32,
     /// Time when the mask was last changed (for mask change animation)
     pub mask_change_time: Option<f32>,
+    /// Locations where players have died (persists across rounds)
+    pub death_locations: Vec<Vec3>,
 }
 
 impl GameState {
@@ -76,6 +78,7 @@ impl GameState {
             just_died: false,
             time: 0.0,
             mask_change_time: None,
+            death_locations: Vec::new(),
         }
     }
 
@@ -408,11 +411,15 @@ impl GameState {
                 if let Some(local_id) = local_peer_id
                     && victim_id == local_id
                 {
+                    // Record death location before marking as dead
+                    self.death_locations.push(self.player.position);
                     self.is_dead = true;
                     self.just_died = true;
                     self.pending_death_sounds += 1;
                     show_death_overlay(killer_id);
                 } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
+                    // Record death location
+                    self.death_locations.push(remote.position);
                     // Another player was killed (not by us - our kills already triggered sound)
                     remote.is_alive = false;
                     remote.targeted_time = 0.0;

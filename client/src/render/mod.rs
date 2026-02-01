@@ -1,4 +1,4 @@
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -290,14 +290,13 @@ impl Renderer {
                 .collect();
 
             let dead_players: Vec<_> = game
-                .remote_players
-                .values()
-                .filter(|remote| !remote.is_alive)
-                .map(|remote| {
+                .death_locations
+                .iter()
+                .map(|&pos| {
                     (
-                        remote.model_matrix(),
+                        Mat4::from_translation(pos),
                         [1.0, 1.0, 1.0, 1.0_f32],
-                        remote.velocity,
+                        Vec3::ZERO,
                     )
                 })
                 .collect();
