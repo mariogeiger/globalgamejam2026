@@ -94,10 +94,55 @@
         #coordinates .value {
             color: #a6e3a1;
         }
+        #death-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(139, 0, 0, 0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+        .death-message {
+            text-align: center;
+            color: #fff;
+            text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
+        }
+        .death-message h2 {
+            font-size: 72px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            letter-spacing: 8px;
+        }
+        .death-message p {
+            font-size: 24px;
+            margin: 10px 0;
+        }
+        .death-message .respawn-hint {
+            font-size: 18px;
+            color: #ccc;
+            margin-top: 30px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div id="wasm-container"></div>
+    
+    <div id="death-overlay">
+        <div class="death-message">
+            <h2>YOU DIED</h2>
+            <p>Killed by Player <span id="killer-id">0</span></p>
+            <p class="respawn-hint">Respawning...</p>
+        </div>
+    </div>
     
     <div id="connection-status">Connecting to server...</div>
     

@@ -179,13 +179,20 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
+                        let local_peer_id = state.network.local_id();
+
                         for event in state.network.poll_events() {
-                            state.game.handle_network_event(event);
+                            state.game.handle_network_event(event, local_peer_id);
                         }
 
                         state.game.update(&mut state.input);
 
-                        if state.network.is_connected() {
+                        // Send any kills we made this frame
+                        for victim_id in state.game.take_pending_kills() {
+                            state.network.send_kill(victim_id);
+                        }
+
+                        if state.network.is_connected() && !state.game.is_dead {
                             state.network.send_player_state(
                                 state.game.player.position,
                                 state.game.player.yaw,

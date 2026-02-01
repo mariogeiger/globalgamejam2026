@@ -7,18 +7,21 @@ use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
 use crate::map::LoadedMap;
-use crate::network::NetworkEvent;
+use crate::network::{NetworkEvent, PeerId};
 use crate::player::{Player, RemotePlayer};
 use crate::team::Team;
 
 pub struct GameState {
     pub player: Player,
-    pub remote_players: HashMap<u64, RemotePlayer>,
+    pub remote_players: HashMap<PeerId, RemotePlayer>,
     pub physics: PhysicsWorld,
     pub spawn_points: Vec<Vec3>,
     pub map_bounds: (Vec3, Vec3),
     pub local_team: Option<Team>,
+    pub is_dead: bool,
+    pub killer_id: Option<PeerId>,
     last_update: Instant,
+    pending_kills: Vec<PeerId>,
 }
 
 impl GameState {
@@ -51,7 +54,10 @@ impl GameState {
             spawn_points: map.spawn_points.clone(),
             map_bounds: (map.bounds_min, map.bounds_max),
             local_team: None,
+            is_dead: false,
+            killer_id: None,
             last_update: Instant::now(),
+            pending_kills: Vec::new(),
         }
     }
 
@@ -59,6 +65,15 @@ impl GameState {
         let now = Instant::now();
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
+
+        // Handle death/respawn timer
+        self.update_death(dt);
+
+        // Don't process movement while dead
+        if self.is_dead {
+            self.update_coordinates_display();
+            return;
+        }
 
         let prev_pos = self.player.position;
         self.player.update(dt, input);
@@ -114,12 +129,14 @@ impl GameState {
         let look_dir = self.player.look_direction();
         let half_angle_rad = (TARGETING_ANGLE / 2.0).to_radians();
 
-        for remote in self.remote_players.values_mut() {
+        let mut new_kills = Vec::new();
+
+        for (&peer_id, remote) in self.remote_players.iter_mut() {
             if !remote.is_alive {
                 remote.dead_time += dt;
                 if remote.dead_time >= RESPAWN_DELAY {
                     remote.respawn();
-                    log::info!("Enemy respawned!");
+                    log::info!("Enemy {} respawned!", peer_id);
                 }
                 continue;
             }
@@ -148,12 +165,21 @@ impl GameState {
                 remote.targeted_time += dt;
                 if remote.targeted_time >= TARGETING_DURATION {
                     remote.is_alive = false;
-                    log::info!("Enemy killed!");
+                    remote.targeted_time = 0.0;
+                    new_kills.push(peer_id);
+                    log::info!("Killed enemy {}!", peer_id);
                 }
             } else {
                 remote.targeted_time = 0.0;
             }
         }
+
+        self.pending_kills.extend(new_kills);
+    }
+
+    /// Take pending kills to be sent over network
+    pub fn take_pending_kills(&mut self) -> Vec<PeerId> {
+        std::mem::take(&mut self.pending_kills)
     }
 
     pub fn get_targeting_info(&self) -> (f32, bool) {
@@ -178,7 +204,7 @@ impl GameState {
         (max_progress, has_target)
     }
 
-    pub fn handle_network_event(&mut self, event: NetworkEvent) {
+    pub fn handle_network_event(&mut self, event: NetworkEvent, local_peer_id: Option<PeerId>) {
         match event {
             NetworkEvent::TeamAssigned(team) => {
                 log::info!("Assigned to team: {:?}", team);
@@ -206,6 +232,25 @@ impl GameState {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
                     remote.position = position;
                     remote.yaw = yaw;
+                }
+            }
+            NetworkEvent::PlayerKilled {
+                killer_id,
+                victim_id,
+            } => {
+                log::info!("Player {} was killed by {}", victim_id, killer_id);
+
+                // Check if we are the victim
+                if let Some(local_id) = local_peer_id
+                    && victim_id == local_id
+                {
+                    self.is_dead = true;
+                    self.killer_id = Some(killer_id);
+                    show_death_overlay(killer_id);
+                } else if let Some(remote) = self.remote_players.get_mut(&victim_id) {
+                    // Another player was killed
+                    remote.is_alive = false;
+                    remote.targeted_time = 0.0;
                 }
             }
         }
@@ -246,5 +291,47 @@ impl GameState {
                 e.set_text_content(Some(&team_b.to_string()));
             }
         }
+    }
+
+    /// Handle local player death timer and respawn
+    pub fn update_death(&mut self, dt: f32) {
+        if !self.is_dead {
+            return;
+        }
+
+        // Use dead_time tracking - we'll reuse a simple approach
+        // The death overlay is shown, wait for RESPAWN_DELAY then respawn
+        static mut DEATH_TIMER: f32 = 0.0;
+
+        unsafe {
+            DEATH_TIMER += dt;
+            if DEATH_TIMER >= RESPAWN_DELAY {
+                DEATH_TIMER = 0.0;
+                self.is_dead = false;
+                self.killer_id = None;
+                hide_death_overlay();
+                self.respawn_player();
+                log::info!("Respawned after death!");
+            }
+        }
+    }
+}
+
+fn show_death_overlay(killer_id: PeerId) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(overlay) = doc.get_element_by_id("death-overlay") {
+            let _ = overlay.set_attribute("style", "display: flex;");
+        }
+        if let Some(killer_elem) = doc.get_element_by_id("killer-id") {
+            killer_elem.set_text_content(Some(&killer_id.to_string()));
+        }
+    }
+}
+
+fn hide_death_overlay() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(overlay) = doc.get_element_by_id("death-overlay")
+    {
+        let _ = overlay.set_attribute("style", "display: none;");
     }
 }

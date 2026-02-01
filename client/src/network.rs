@@ -6,8 +6,8 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{
-    MessageEvent, RtcConfiguration, RtcDataChannel, RtcDataChannelEvent, RtcIceCandidate,
-    RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
+    MessageEvent, RtcConfiguration, RtcDataChannel, RtcDataChannelEvent, RtcDataChannelInit,
+    RtcIceCandidate, RtcIceCandidateInit, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
     RtcSessionDescriptionInit, Url, WebSocket,
 };
 
@@ -29,6 +29,10 @@ pub enum NetworkEvent {
         id: PeerId,
         position: Vec3,
         yaw: f32,
+    },
+    PlayerKilled {
+        killer_id: PeerId,
+        victim_id: PeerId,
     },
 }
 
@@ -53,17 +57,12 @@ impl PlayerStateMessage {
     }
 }
 
+/// Messages sent/received on the reliable "events" channel
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct GameMessage {
-    msg_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    x: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    y: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    z: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    yaw: Option<f32>,
+#[serde(tag = "type")]
+enum EventMessage {
+    #[serde(rename = "kill")]
+    Kill { victim_id: PeerId },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -120,7 +119,10 @@ enum ServerMessage {
 #[allow(dead_code)]
 struct PeerConnection {
     pc: RtcPeerConnection,
-    data_channel: Option<RtcDataChannel>,
+    /// Unreliable channel for position updates
+    state_channel: Option<RtcDataChannel>,
+    /// Reliable channel for game events (kills)
+    events_channel: Option<RtcDataChannel>,
     team: Team,
     pending_candidates: Vec<IceCandidateData>,
 }
@@ -195,13 +197,31 @@ impl NetworkClient {
         let state = self.state.borrow();
         if let Ok(json) = serde_json::to_string(&PlayerStateMessage::new(position, yaw)) {
             for peer in state.peers.values() {
-                if let Some(ref dc) = peer.data_channel
+                if let Some(ref dc) = peer.state_channel
                     && dc.ready_state() == web_sys::RtcDataChannelState::Open
                 {
                     let _ = dc.send_with_str(&json);
                 }
             }
         }
+    }
+
+    pub fn send_kill(&self, victim_id: PeerId) {
+        let state = self.state.borrow();
+        let msg = EventMessage::Kill { victim_id };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            for peer in state.peers.values() {
+                if let Some(ref dc) = peer.events_channel
+                    && dc.ready_state() == web_sys::RtcDataChannelState::Open
+                {
+                    let _ = dc.send_with_str(&json);
+                }
+            }
+        }
+    }
+
+    pub fn local_id(&self) -> Option<PeerId> {
+        self.state.borrow().local_id
     }
 
     pub fn is_connected(&self) -> bool {
@@ -278,8 +298,17 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
 
                 for peer_info in peers {
                     if let Ok(pc) = create_peer_connection(&ws, &state, peer_info.id) {
-                        let dc = pc.create_data_channel("game-sync");
-                        setup_data_channel(&dc, &state, peer_info.id);
+                        // Create unreliable channel for position updates
+                        let state_init = RtcDataChannelInit::new();
+                        state_init.set_ordered(false);
+                        state_init.set_max_retransmits(0);
+                        let state_dc =
+                            pc.create_data_channel_with_data_channel_dict("state", &state_init);
+                        setup_state_channel(&state_dc, &state, peer_info.id);
+
+                        // Create reliable channel for game events (kills)
+                        let events_dc = pc.create_data_channel("events");
+                        setup_events_channel(&events_dc, &state, peer_info.id);
 
                         {
                             let mut s = state.borrow_mut();
@@ -287,7 +316,8 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                                 peer_info.id,
                                 PeerConnection {
                                     pc: pc.clone(),
-                                    data_channel: Some(dc),
+                                    state_channel: Some(state_dc),
+                                    events_channel: Some(events_dc),
                                     team: peer_info.team,
                                     pending_candidates: Vec::new(),
                                 },
@@ -323,7 +353,8 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         peer_id,
                         PeerConnection {
                             pc,
-                            data_channel: None,
+                            state_channel: None,
+                            events_channel: None,
                             team,
                             pending_candidates: Vec::new(),
                         },
@@ -492,10 +523,26 @@ fn create_peer_connection(
     let ondc = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcDataChannelEvent = ev.unchecked_into();
         let dc = ev.channel();
-        setup_data_channel(&dc, &state_clone, peer_id);
-        let mut s = state_clone.borrow_mut();
-        if let Some(peer) = s.peers.get_mut(&peer_id) {
-            peer.data_channel = Some(dc);
+        let label = dc.label();
+
+        match label.as_str() {
+            "state" => {
+                setup_state_channel(&dc, &state_clone, peer_id);
+                let mut s = state_clone.borrow_mut();
+                if let Some(peer) = s.peers.get_mut(&peer_id) {
+                    peer.state_channel = Some(dc);
+                }
+            }
+            "events" => {
+                setup_events_channel(&dc, &state_clone, peer_id);
+                let mut s = state_clone.borrow_mut();
+                if let Some(peer) = s.peers.get_mut(&peer_id) {
+                    peer.events_channel = Some(dc);
+                }
+            }
+            _ => {
+                log::warn!("Unknown data channel: {}", label);
+            }
         }
     }) as Box<dyn FnMut(JsValue)>);
     pc.set_ondatachannel(Some(ondc.as_ref().unchecked_ref()));
@@ -504,10 +551,11 @@ fn create_peer_connection(
     Ok(pc)
 }
 
-fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
+/// Set up the unreliable "state" channel for position updates
+fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
     let state_clone = state.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
-        log::info!("Data channel open with peer {}", peer_id);
+        log::info!("State channel open with peer {}", peer_id);
         update_peer_count(&state_clone);
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
@@ -519,19 +567,49 @@ fn setup_data_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
         let Some(data) = ev.data().as_string() else {
             return;
         };
-        let Ok(msg) = serde_json::from_str::<GameMessage>(&data) else {
+        let Ok(msg) = serde_json::from_str::<PlayerStateMessage>(&data) else {
             return;
         };
 
-        if msg.msg_type == "player_state"
-            && let (Some(x), Some(y), Some(z), Some(yaw)) = (msg.x, msg.y, msg.z, msg.yaw)
-        {
-            let mut s = state_clone.borrow_mut();
-            s.pending_events.push(NetworkEvent::PlayerState {
-                id: peer_id,
-                position: Vec3::new(x, y, z),
-                yaw,
-            });
+        let mut s = state_clone.borrow_mut();
+        s.pending_events.push(NetworkEvent::PlayerState {
+            id: peer_id,
+            position: Vec3::new(msg.x, msg.y, msg.z),
+            yaw: msg.yaw,
+        });
+    }) as Box<dyn FnMut(JsValue)>);
+    dc.set_onmessage(Some(onmsg.as_ref().unchecked_ref()));
+    onmsg.forget();
+}
+
+/// Set up the reliable "events" channel for game events (kills)
+fn setup_events_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
+    let onopen = Closure::wrap(Box::new(move |_: JsValue| {
+        log::info!("Events channel open with peer {}", peer_id);
+    }) as Box<dyn FnMut(JsValue)>);
+    dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+    onopen.forget();
+
+    let state_clone = state.clone();
+    let onmsg = Closure::wrap(Box::new(move |ev: JsValue| {
+        let ev: MessageEvent = ev.unchecked_into();
+        let Some(data) = ev.data().as_string() else {
+            return;
+        };
+        let Ok(msg) = serde_json::from_str::<EventMessage>(&data) else {
+            log::warn!("Failed to parse event message: {}", data);
+            return;
+        };
+
+        match msg {
+            EventMessage::Kill { victim_id } => {
+                log::info!("Received kill event: peer {} killed {}", peer_id, victim_id);
+                let mut s = state_clone.borrow_mut();
+                s.pending_events.push(NetworkEvent::PlayerKilled {
+                    killer_id: peer_id,
+                    victim_id,
+                });
+            }
         }
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onmessage(Some(onmsg.as_ref().unchecked_ref()));
@@ -616,7 +694,8 @@ fn update_peer_count(state: &StateRef) {
         .peers
         .values()
         .filter(|p| {
-            p.data_channel
+            // Consider connected if state channel is open (primary channel for gameplay)
+            p.state_channel
                 .as_ref()
                 .is_some_and(|dc| dc.ready_state() == web_sys::RtcDataChannelState::Open)
         })
