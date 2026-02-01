@@ -1,8 +1,7 @@
 use js_sys::{Array, Uint8Array};
 use web_sys::{Blob, BlobPropertyBag, HtmlAudioElement, Url};
 
-const CHARGE_SOUND: &[u8] = include_bytes!("../assets/laser-charge-175727.mp3");
-const BELL_SOUND: &[u8] = include_bytes!("../assets/bell.mp3");
+use crate::assets::{BELL_SOUND, CHARGE_SOUND};
 
 pub struct Audio {
     charge_sound: HtmlAudioElement,

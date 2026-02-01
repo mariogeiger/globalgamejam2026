@@ -7,6 +7,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod assets;
 mod audio;
 mod collision;
 mod config;
@@ -19,6 +20,7 @@ mod network;
 mod player;
 mod render;
 
+use assets::EMBEDDED_MAP;
 use audio::Audio;
 use config::DEBUG_MANNEQUINS;
 use game::GameState;
@@ -27,8 +29,6 @@ use input::InputState;
 use mesh::Mesh;
 use network::NetworkClient;
 use render::Renderer;
-
-const EMBEDDED_MAP: &[u8] = include_bytes!("../assets/dust2.glb");
 
 struct ClientState {
     renderer: Renderer,

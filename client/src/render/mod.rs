@@ -2,15 +2,12 @@ use glam::Mat4;
 use std::sync::Arc;
 use winit::window::Window;
 
+use crate::assets::{EMBEDDED_MASK, EMBEDDED_PLAYER, EMBEDDED_TOMBSTONE};
 use crate::config::PLAYER_HEIGHT;
 use crate::game::GameState;
 use crate::glb::load_mesh_from_bytes;
 use crate::gpu::{camera_bind_group_layout, create_depth_texture};
 use crate::mesh::Mesh;
-
-const EMBEDDED_PLAYER: &[u8] = include_bytes!("../../assets/player.glb");
-const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
-const EMBEDDED_MASK: &[u8] = include_bytes!("../../assets/mask.glb");
 
 pub mod camera;
 pub mod cone;
