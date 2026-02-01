@@ -33,5 +33,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_scene, s_scene, in.uv);
+    // Use textureLoad for unfilterable float textures (Rgba32Float)
+    let pixel_coord = vec2<i32>(in.uv * params.resolution);
+    let position = textureLoad(t_position, pixel_coord, 0);
+
+    let col = textureSample(t_scene, s_scene, in.uv);
+    return vec4(mix(col.xyz,cos(position.xyz+vec3(20.*params.time)),exp(.01*position.z)), 1.0);
+    
 }
