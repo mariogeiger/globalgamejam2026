@@ -8,7 +8,8 @@ use crate::config::*;
 use crate::input::InputState;
 use crate::mesh::Mesh;
 use crate::network::{GamePhase, NetworkEvent, PeerId};
-use crate::player::{Player, RemotePlayer};
+use crate::player::{MaskType, Player, RemotePlayer};
+use winit::keyboard::KeyCode;
 
 pub struct GameState {
     pub player: Player,
@@ -42,6 +43,7 @@ impl GameState {
             // Create mannequins at different spawn points for testing
             let mut mannequin1 = RemotePlayer::new();
             mannequin1.position = Self::get_spawn_point((spawn_idx + 1) % SPAWN_POINTS.len());
+            mannequin1.mask = MaskType::Hunter; // Test Hunter cone rendering
             remote_players.insert(u64::MAX, mannequin1);
 
             let mut mannequin2 = RemotePlayer::new();
@@ -125,6 +127,9 @@ impl GameState {
 
         self.update_hud_display();
 
+        // Handle mask switching input (always available, even in spectator)
+        self.update_mask_input(input);
+
         // Spectator mode: when dead, during victory, or waiting to join mid-game
         let is_spectator =
             self.is_dead || self.phase == GamePhase::Victory || self.phase == GamePhase::Spectating;
@@ -155,6 +160,28 @@ impl GameState {
         }
     }
 
+    fn update_mask_input(&mut self, input: &mut InputState) {
+        if input.just_pressed(KeyCode::Digit1) {
+            self.player.set_mask(MaskType::Ghost);
+        }
+        if input.just_pressed(KeyCode::Digit2) {
+            self.player.set_mask(MaskType::Coward);
+        }
+        if input.just_pressed(KeyCode::Digit3) {
+            self.player.set_mask(MaskType::Hunter);
+        }
+        if input.just_pressed(KeyCode::KeyE) {
+            self.player.swap_to_last_mask();
+        }
+
+        let scroll = input.consume_scroll();
+        if scroll > 0.0 {
+            self.player.cycle_mask_next();
+        } else if scroll < 0.0 {
+            self.player.cycle_mask_prev();
+        }
+    }
+
     fn check_respawn(&mut self) {
         let (bounds_min, bounds_max) = self.map_bounds;
         let pos = self.player.position;
@@ -179,6 +206,15 @@ impl GameState {
         if self.is_dead {
             return;
         }
+
+        // Coward mask cannot kill
+        let can_kill = self.player.mask != MaskType::Coward;
+
+        // Hunter mask kills faster
+        let kill_duration = match self.player.mask {
+            MaskType::Hunter => HUNTER_KILL_DURATION,
+            _ => TARGETING_DURATION,
+        };
 
         let eye_pos = self.player.eye_position();
         let look_dir = self.player.look_direction();
@@ -205,12 +241,18 @@ impl GameState {
             let angle = dot.acos();
 
             if angle < half_angle_rad && self.physics.is_visible(eye_pos, enemy_center) {
-                remote.targeted_time += dt;
-                if remote.targeted_time >= TARGETING_DURATION {
-                    remote.is_alive = false;
+                // Only accumulate targeting time if we can kill (Coward can't charge up)
+                if can_kill {
+                    remote.targeted_time += dt;
+                    if remote.targeted_time >= kill_duration {
+                        remote.is_alive = false;
+                        remote.targeted_time = 0.0;
+                        new_kills.push(peer_id);
+                        log::info!("Killed enemy {}!", peer_id);
+                    }
+                } else {
+                    // Coward mask: reset any accumulated time to prevent exploit
                     remote.targeted_time = 0.0;
-                    new_kills.push(peer_id);
-                    log::info!("Killed enemy {}!", peer_id);
                 }
             } else {
                 remote.targeted_time = 0.0;
@@ -242,6 +284,12 @@ impl GameState {
             return (0.0, false);
         }
 
+        // Use same kill duration as update_targeting
+        let kill_duration = match self.player.mask {
+            MaskType::Hunter => HUNTER_KILL_DURATION,
+            _ => TARGETING_DURATION,
+        };
+
         let mut max_progress = 0.0f32;
         let mut has_target = false;
 
@@ -251,7 +299,7 @@ impl GameState {
             }
             if remote.targeted_time > 0.0 {
                 has_target = true;
-                max_progress = max_progress.max(remote.targeted_time / TARGETING_DURATION);
+                max_progress = max_progress.max(remote.targeted_time / kill_duration);
             }
         }
 
@@ -314,10 +362,16 @@ impl GameState {
                     };
                 self.set_phase(actual_phase, time_remaining);
             }
-            NetworkEvent::PlayerState { id, position, yaw } => {
+            NetworkEvent::PlayerState {
+                id,
+                position,
+                yaw,
+                mask,
+            } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
                     remote.position = position;
                     remote.yaw = yaw;
+                    remote.mask = MaskType::from_u8(mask);
                 }
             }
             NetworkEvent::PlayerKilled {

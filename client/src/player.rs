@@ -4,12 +4,49 @@ use winit::keyboard::KeyCode;
 use crate::config::*;
 use crate::input::InputState;
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[repr(u8)]
+pub enum MaskType {
+    #[default]
+    Ghost = 1,
+    Coward = 2,
+    Hunter = 3,
+}
+
+impl MaskType {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            2 => Self::Coward,
+            3 => Self::Hunter,
+            _ => Self::Ghost,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Ghost => Self::Coward,
+            Self::Coward => Self::Hunter,
+            Self::Hunter => Self::Ghost,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Ghost => Self::Hunter,
+            Self::Coward => Self::Ghost,
+            Self::Hunter => Self::Coward,
+        }
+    }
+}
+
 pub struct Player {
     pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub velocity: Vec3,
     pub on_ground: bool,
+    pub mask: MaskType,
+    pub last_mask: MaskType,
 }
 
 impl Player {
@@ -20,6 +57,34 @@ impl Player {
             pitch: 0.0,
             velocity: Vec3::ZERO,
             on_ground: false,
+            mask: MaskType::Ghost,
+            last_mask: MaskType::Ghost,
+        }
+    }
+
+    pub fn set_mask(&mut self, mask: MaskType) {
+        if mask != self.mask {
+            self.last_mask = self.mask;
+            self.mask = mask;
+        }
+    }
+
+    pub fn swap_to_last_mask(&mut self) {
+        std::mem::swap(&mut self.mask, &mut self.last_mask);
+    }
+
+    pub fn cycle_mask_next(&mut self) {
+        self.set_mask(self.mask.next());
+    }
+
+    pub fn cycle_mask_prev(&mut self) {
+        self.set_mask(self.mask.prev());
+    }
+
+    pub fn move_speed(&self) -> f32 {
+        match self.mask {
+            MaskType::Coward => MOVE_SPEED * COWARD_SPEED_MULTIPLIER,
+            _ => MOVE_SPEED,
         }
     }
 
@@ -47,9 +112,10 @@ impl Player {
         }
 
         let move_dir = move_dir.normalize_or_zero();
+        let speed = self.move_speed();
 
-        self.velocity.x = move_dir.x * MOVE_SPEED;
-        self.velocity.z = move_dir.z * MOVE_SPEED;
+        self.velocity.x = move_dir.x * speed;
+        self.velocity.z = move_dir.z * speed;
 
         if self.on_ground && input.is_pressed(KeyCode::Space) {
             self.velocity.y = JUMP_VELOCITY;
@@ -147,6 +213,7 @@ pub struct RemotePlayer {
     pub yaw: f32,
     pub is_alive: bool,
     pub targeted_time: f32,
+    pub mask: MaskType,
 }
 
 impl RemotePlayer {
@@ -156,6 +223,7 @@ impl RemotePlayer {
             yaw: 0.0,
             is_alive: true,
             targeted_time: 0.0,
+            mask: MaskType::Ghost,
         }
     }
 

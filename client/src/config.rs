@@ -33,5 +33,11 @@ pub const SPAWN_POINTS: &[[f32; 3]] = &[
 pub const TARGETING_ANGLE: f32 = 60.0;
 pub const TARGETING_DURATION: f32 = 1.0;
 
+// Mask system
+pub const COWARD_SPEED_MULTIPLIER: f32 = 1.5;
+pub const HUNTER_KILL_DURATION: f32 = 0.7;
+pub const HUNTER_CONE_LENGTH: f32 = 5000.0;
+pub const HUNTER_CONE_ALPHA: f32 = 0.3;
+
 // Debug options
 pub const DEBUG_MANNEQUINS: bool = true;

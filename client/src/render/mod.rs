@@ -12,6 +12,7 @@ const EMBEDDED_PLAYER: &[u8] = include_bytes!("../../assets/player.glb");
 const EMBEDDED_TOMBSTONE: &[u8] = include_bytes!("../../assets/tombe.glb");
 
 pub mod camera;
+pub mod cone;
 pub mod hud;
 pub mod map;
 pub mod player;
@@ -19,11 +20,14 @@ pub mod postprocess;
 pub mod traits;
 
 use camera::CameraState;
+use cone::ConeRenderer;
 use hud::HudRenderer;
 use map::MapRenderer;
 use player::PlayerRenderer;
 use postprocess::{PostProcessApplyParams, PostProcessor};
 use traits::Renderable;
+
+use crate::player::MaskType;
 
 pub struct RenderContext {
     pub window: Arc<Window>,
@@ -99,6 +103,7 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
     map_renderer: MapRenderer,
     player_renderer: PlayerRenderer,
+    cone_renderer: ConeRenderer,
     postprocessor: PostProcessor,
     hud_renderer: HudRenderer,
 }
@@ -140,6 +145,8 @@ impl Renderer {
             &tombstone_mesh,
         );
 
+        let cone_renderer = ConeRenderer::new(&ctx.device, &camera_layout, ctx.config.format);
+
         let postprocessor = PostProcessor::new(
             &ctx.device,
             ctx.config.format,
@@ -156,6 +163,7 @@ impl Renderer {
             depth_view,
             map_renderer,
             player_renderer,
+            cone_renderer,
             postprocessor,
             hud_renderer,
         }
@@ -255,6 +263,22 @@ impl Renderer {
                 &alive_players,
                 &dead_players,
             );
+
+            // Render vision cones for Hunter mask players (transparent, after opaque geometry)
+            let hunter_cones: Vec<_> = game
+                .remote_players
+                .values()
+                .filter(|remote| remote.is_alive && remote.mask == MaskType::Hunter)
+                .map(|remote| (remote.position, remote.yaw, 0.0_f32)) // No pitch synced for remote players
+                .collect();
+
+            self.cone_renderer.render(
+                &mut pass,
+                &self.ctx.queue,
+                &self.ctx.device,
+                &self.camera.bind_group,
+                &hunter_cones,
+            );
         }
 
         self.postprocessor.apply(
@@ -267,6 +291,7 @@ impl Renderer {
                 view: game.player.view_matrix(),
                 width: self.ctx.config.width,
                 height: self.ctx.config.height,
+                mask_type: game.player.mask as u8,
             },
         );
 

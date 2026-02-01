@@ -25,6 +25,8 @@ struct PostProcessParams {
     depth_far: f32,
     inv_view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
+    mask_tint: vec3<f32>,
+    mask_tint_strength: f32,
 }
 
 struct VertexInput {
@@ -78,6 +80,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     //     return vec4(cos(world_position.xyz),1);
     // }
 
+    // Apply mask tint
+    let tinted = mix(current.rgb, params.mask_tint, params.mask_tint_strength);
 
-    return current;
+    return vec4<f32>(tinted, current.a);
 }

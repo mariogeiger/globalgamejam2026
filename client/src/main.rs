@@ -177,6 +177,18 @@ impl ApplicationHandler for App {
                     });
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        let scroll_y = match delta {
+                            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
+                        };
+                        state.input.handle_scroll(scroll_y);
+                        state.renderer.request_redraw();
+                    }
+                });
+            }
             WindowEvent::RedrawRequested => {
                 STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
@@ -202,6 +214,7 @@ impl ApplicationHandler for App {
                             state.network.send_player_state(
                                 state.game.player.position,
                                 state.game.player.yaw,
+                                state.game.player.mask as u8,
                             );
                         }
 
@@ -214,6 +227,8 @@ impl ApplicationHandler for App {
                             Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                             Err(e) => log::error!("Render error: {:?}", e),
                         }
+
+                        state.input.end_frame();
                     }
                 });
             }

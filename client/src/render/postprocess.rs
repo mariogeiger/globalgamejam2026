@@ -19,6 +19,10 @@ pub struct PostProcessUniform {
     pub inv_view_proj: [[f32; 4]; 4],
     /// View matrix (world -> camera space) for screen_space_position.
     pub view: [[f32; 4]; 4],
+    /// Mask tint RGB color
+    pub mask_tint: [f32; 3],
+    /// Mask tint strength (0.0 = no tint, 1.0 = full tint)
+    pub mask_tint_strength: f32,
 }
 
 /// Parameters for a single postprocess apply call (avoids too many arguments).
@@ -28,6 +32,8 @@ pub struct PostProcessApplyParams {
     pub view: Mat4,
     pub width: u32,
     pub height: u32,
+    /// Mask type for color tinting (1=Ghost, 2=Coward, 3=Hunter)
+    pub mask_type: u8,
 }
 
 #[repr(C)]
@@ -244,6 +250,8 @@ impl PostProcessor {
             depth_far: 10000.0,
             inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             view: Mat4::IDENTITY.to_cols_array_2d(),
+            mask_tint: [1.0, 1.0, 1.0],
+            mask_tint_strength: 0.0,
         };
         let uniform_buffer = create_uniform_buffer(device, &uniform, "Postprocess Uniform");
 
@@ -516,6 +524,13 @@ impl PostProcessor {
         let smear_factor = if self.first_frame { 0.0 } else { 0.85 };
         self.first_frame = false;
 
+        // Compute mask tint based on mask type
+        let (mask_tint, mask_tint_strength) = match params.mask_type {
+            2 => ([1.0, 1.0, 1.0], 0.15), // Coward: whiter (desaturate)
+            3 => ([1.0, 0.3, 0.3], 0.2),  // Hunter: redder
+            _ => ([1.0, 1.0, 1.0], 0.0),  // Ghost: no tint
+        };
+
         queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -528,6 +543,8 @@ impl PostProcessor {
                 depth_far: 10000.0,
                 inv_view_proj: params.view_proj.inverse().to_cols_array_2d(),
                 view: params.view.to_cols_array_2d(),
+                mask_tint,
+                mask_tint_strength,
             }]),
         );
 
