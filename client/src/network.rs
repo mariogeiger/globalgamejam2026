@@ -44,6 +44,7 @@ pub enum NetworkEvent {
         id: PeerId,
         position: Vec3,
         yaw: f32,
+        pitch: f32,
         mask: u8,
     },
     PlayerKilled {
@@ -60,17 +61,20 @@ struct PlayerStateMessage {
     z: f32,
     yaw: f32,
     #[serde(default)]
+    pitch: f32,
+    #[serde(default)]
     mask: u8,
 }
 
 impl PlayerStateMessage {
-    fn new(position: Vec3, yaw: f32, mask: u8) -> Self {
+    fn new(position: Vec3, yaw: f32, pitch: f32, mask: u8) -> Self {
         Self {
             msg_type: "player_state".to_string(),
             x: position.x,
             y: position.y,
             z: position.z,
             yaw,
+            pitch,
             mask,
         }
     }
@@ -217,9 +221,11 @@ impl NetworkClient {
         std::mem::take(&mut state.pending_events)
     }
 
-    pub fn send_player_state(&self, position: Vec3, yaw: f32, mask: u8) {
+    pub fn send_player_state(&self, position: Vec3, yaw: f32, pitch: f32, mask: u8) {
         let state = self.state.borrow();
-        if let Ok(json) = serde_json::to_string(&PlayerStateMessage::new(position, yaw, mask)) {
+        if let Ok(json) =
+            serde_json::to_string(&PlayerStateMessage::new(position, yaw, pitch, mask))
+        {
             for peer in state.peers.values() {
                 if let Some(ref dc) = peer.state_channel
                     && dc.ready_state() == web_sys::RtcDataChannelState::Open
@@ -620,6 +626,7 @@ fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
             id: peer_id,
             position: Vec3::new(msg.x, msg.y, msg.z),
             yaw: msg.yaw,
+            pitch: msg.pitch,
             mask: msg.mask,
         });
     }) as Box<dyn FnMut(JsValue)>);

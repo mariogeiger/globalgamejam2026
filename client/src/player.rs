@@ -211,6 +211,7 @@ impl Player {
 pub struct RemotePlayer {
     pub position: Vec3,
     pub yaw: f32,
+    pub pitch: f32,
     pub is_alive: bool,
     pub targeted_time: f32,
     pub mask: MaskType,
@@ -221,6 +222,7 @@ impl RemotePlayer {
         Self {
             position: Vec3::ZERO,
             yaw: 0.0,
+            pitch: 0.0,
             is_alive: true,
             targeted_time: 0.0,
             mask: MaskType::Ghost,

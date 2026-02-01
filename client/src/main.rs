@@ -214,6 +214,7 @@ impl ApplicationHandler for App {
                             state.network.send_player_state(
                                 state.game.player.position,
                                 state.game.player.yaw,
+                                state.game.player.pitch,
                                 state.game.player.mask as u8,
                             );
                         }

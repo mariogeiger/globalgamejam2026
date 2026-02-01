@@ -366,11 +366,13 @@ impl GameState {
                 id,
                 position,
                 yaw,
+                pitch,
                 mask,
             } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
                     remote.position = position;
                     remote.yaw = yaw;
+                    remote.pitch = pitch;
                     remote.mask = MaskType::from_u8(mask);
                 }
             }

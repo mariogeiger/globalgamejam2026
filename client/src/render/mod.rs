@@ -269,7 +269,7 @@ impl Renderer {
                 .remote_players
                 .values()
                 .filter(|remote| remote.is_alive && remote.mask == MaskType::Hunter)
-                .map(|remote| (remote.position, remote.yaw, 0.0_f32)) // No pitch synced for remote players
+                .map(|remote| (remote.position, remote.yaw, remote.pitch))
                 .collect();
 
             self.cone_renderer.render(
