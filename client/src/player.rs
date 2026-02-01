@@ -63,6 +63,42 @@ impl Player {
         self.position += self.velocity * dt;
     }
 
+    /// Spectator mode: fly freely, 10x speed, no collision
+    pub fn spectator_update(&mut self, dt: f32, input: &mut InputState) {
+        let (dx, dy) = input.consume_mouse_delta();
+        self.yaw += dx * MOUSE_SENSITIVITY;
+        self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY).clamp(-1.5, 1.5);
+
+        // 3D movement in look direction
+        let look_dir = self.look_direction();
+        let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin());
+
+        let mut move_dir = Vec3::ZERO;
+        if input.is_pressed(KeyCode::KeyW) {
+            move_dir += look_dir;
+        }
+        if input.is_pressed(KeyCode::KeyS) {
+            move_dir -= look_dir;
+        }
+        if input.is_pressed(KeyCode::KeyD) {
+            move_dir += right;
+        }
+        if input.is_pressed(KeyCode::KeyA) {
+            move_dir -= right;
+        }
+        if input.is_pressed(KeyCode::Space) {
+            move_dir.y += 1.0;
+        }
+        if input.is_pressed(KeyCode::ShiftLeft) {
+            move_dir.y -= 1.0;
+        }
+
+        let move_dir = move_dir.normalize_or_zero();
+        let spectator_speed = MOVE_SPEED * 10.0;
+
+        self.position += move_dir * spectator_speed * dt;
+    }
+
     pub fn view_matrix(&self) -> Mat4 {
         let eye = self.position + Vec3::new(0.0, EYE_HEIGHT, 0.0);
         let look_dir = Vec3::new(
