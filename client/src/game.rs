@@ -373,7 +373,8 @@ impl GameState {
                 mask,
             } => {
                 if let Some(remote) = self.remote_players.get_mut(&id) {
-                    remote.position = position;
+                    // Assume ~20 Hz network updates for velocity estimation
+                    remote.update_position(position, 0.05);
                     remote.yaw = yaw;
                     remote.pitch = pitch;
                     remote.mask = MaskType::from_u8(mask);

@@ -1,8 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::gpu::{
-    create_render_target_texture, create_uniform_buffer, create_vertex_buffer,
-    texture_bind_group_layout, uniform_bind_group_layout,
+    create_render_target_texture_with_label, create_uniform_buffer, create_vertex_buffer,
+    gbuffer_texture_bind_group_layout, uniform_bind_group_layout,
 };
 
 #[repr(C)]
@@ -82,12 +82,16 @@ pub struct PostProcessor {
     hunter_pipeline: wgpu::RenderPipeline,
     offscreen_texture: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
+    position_texture: wgpu::Texture,
+    position_view: wgpu::TextureView,
+    velocity_texture: wgpu::Texture,
+    velocity_view: wgpu::TextureView,
     uniform_buffer: wgpu::Buffer,
     scene_bind_group: wgpu::BindGroup,
     uniform_bind_group: wgpu::BindGroup,
     quad_buffer: wgpu::Buffer,
     sampler: wgpu::Sampler,
-    texture_layout: wgpu::BindGroupLayout,
+    gbuffer_layout: wgpu::BindGroupLayout,
     uniform_layout: wgpu::BindGroupLayout,
 }
 
@@ -98,10 +102,31 @@ impl PostProcessor {
         width: u32,
         height: u32,
     ) -> Self {
-        let (offscreen_texture, offscreen_view) =
-            create_render_target_texture(device, width, height, surface_format);
+        let (offscreen_texture, offscreen_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            surface_format,
+            "Color Render Target",
+        );
 
-        let texture_layout = texture_bind_group_layout(device);
+        let (position_texture, position_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba32Float,
+            "Position Render Target",
+        );
+
+        let (velocity_texture, velocity_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba16Float,
+            "Velocity Render Target",
+        );
+
+        let gbuffer_layout = gbuffer_texture_bind_group_layout(device);
         let uniform_layout = uniform_bind_group_layout(device, "Postprocess Uniform Layout");
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -115,7 +140,7 @@ impl PostProcessor {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Postprocess Pipeline Layout"),
-            bind_group_layouts: &[&texture_layout, &uniform_layout],
+            bind_group_layouts: &[&gbuffer_layout, &uniform_layout],
             immediate_size: 0,
         });
 
@@ -170,7 +195,7 @@ impl PostProcessor {
 
         let scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scene Bind Group"),
-            layout: &texture_layout,
+            layout: &gbuffer_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -179,6 +204,14 @@ impl PostProcessor {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&position_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&velocity_view),
                 },
             ],
         });
@@ -200,18 +233,30 @@ impl PostProcessor {
             hunter_pipeline,
             offscreen_texture,
             offscreen_view,
+            position_texture,
+            position_view,
+            velocity_texture,
+            velocity_view,
             uniform_buffer,
             scene_bind_group,
             uniform_bind_group,
             quad_buffer,
             sampler,
-            texture_layout,
+            gbuffer_layout,
             uniform_layout,
         }
     }
 
     pub fn offscreen_view(&self) -> &wgpu::TextureView {
         &self.offscreen_view
+    }
+
+    pub fn position_view(&self) -> &wgpu::TextureView {
+        &self.position_view
+    }
+
+    pub fn velocity_view(&self) -> &wgpu::TextureView {
+        &self.velocity_view
     }
 
     pub fn resize(
@@ -221,15 +266,40 @@ impl PostProcessor {
         height: u32,
         format: wgpu::TextureFormat,
     ) {
-        let (offscreen_texture, offscreen_view) =
-            create_render_target_texture(device, width, height, format);
+        let (offscreen_texture, offscreen_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            format,
+            "Color Render Target",
+        );
+
+        let (position_texture, position_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba32Float,
+            "Position Render Target",
+        );
+
+        let (velocity_texture, velocity_view) = create_render_target_texture_with_label(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba16Float,
+            "Velocity Render Target",
+        );
 
         self.offscreen_texture = offscreen_texture;
         self.offscreen_view = offscreen_view;
+        self.position_texture = position_texture;
+        self.position_view = position_view;
+        self.velocity_texture = velocity_texture;
+        self.velocity_view = velocity_view;
 
         self.scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scene Bind Group"),
-            layout: &self.texture_layout,
+            layout: &self.gbuffer_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -238,6 +308,14 @@ impl PostProcessor {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.position_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.velocity_view),
                 },
             ],
         });

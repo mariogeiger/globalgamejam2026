@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::gpu::{
@@ -12,6 +12,7 @@ use crate::mesh::{Mesh, Vertex};
 pub struct PlayerUniform {
     pub model: [[f32; 4]; 4],
     pub color: [f32; 4],
+    pub object_velocity: [f32; 4],
 }
 
 /// Merge all submeshes into single vertex/index buffers
@@ -77,11 +78,23 @@ impl PlayerRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba32Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -216,6 +229,7 @@ impl PlayerRenderer {
             let uniform = PlayerUniform {
                 model: Mat4::IDENTITY.to_cols_array_2d(),
                 color: [1.0, 1.0, 1.0, 1.0],
+                object_velocity: [0.0, 0.0, 0.0, 0.0],
             };
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Player Uniform Buffer"),
@@ -240,8 +254,8 @@ impl PlayerRenderer {
         queue: &wgpu::Queue,
         device: &wgpu::Device,
         camera_bind_group: &'a wgpu::BindGroup,
-        alive_players: &[(Mat4, [f32; 4])],
-        dead_players: &[(Mat4, [f32; 4])],
+        alive_players: &[(Mat4, [f32; 4], Vec3)],
+        dead_players: &[(Mat4, [f32; 4], Vec3)],
     ) {
         let total_count = alive_players.len() + dead_players.len();
         if total_count == 0 {
@@ -262,10 +276,11 @@ impl PlayerRenderer {
             );
             pass.set_bind_group(2, &self.player_texture_bind_group, &[]);
 
-            for (i, (model, color)) in alive_players.iter().enumerate() {
+            for (i, (model, color, velocity)) in alive_players.iter().enumerate() {
                 let uniform = PlayerUniform {
                     model: model.to_cols_array_2d(),
                     color: *color,
+                    object_velocity: [velocity.x, velocity.y, velocity.z, 0.0],
                 };
                 let (buffer, bind_group) = &self.uniform_pool[i];
                 queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[uniform]));
@@ -283,10 +298,11 @@ impl PlayerRenderer {
             );
             pass.set_bind_group(2, &self.tombstone_texture_bind_group, &[]);
 
-            for (i, (model, color)) in dead_players.iter().enumerate() {
+            for (i, (model, color, velocity)) in dead_players.iter().enumerate() {
                 let uniform = PlayerUniform {
                     model: model.to_cols_array_2d(),
                     color: *color,
+                    object_velocity: [velocity.x, velocity.y, velocity.z, 0.0],
                 };
                 let pool_idx = alive_players.len() + i;
                 let (buffer, bind_group) = &self.uniform_pool[pool_idx];

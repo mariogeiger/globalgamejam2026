@@ -53,11 +53,23 @@ impl MapRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba32Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {

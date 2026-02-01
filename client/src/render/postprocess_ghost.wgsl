@@ -2,6 +2,8 @@
 
 @group(0) @binding(0) var t_scene: texture_2d<f32>;
 @group(0) @binding(1) var s_scene: sampler;
+@group(0) @binding(2) var t_position: texture_2d<f32>;
+@group(0) @binding(3) var t_velocity: texture_2d<f32>;
 
 @group(1) @binding(0) var<uniform> params: Params;
 

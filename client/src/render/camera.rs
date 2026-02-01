@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 
 use crate::gpu::{camera_bind_group_layout, create_uniform_buffer};
 
@@ -7,6 +7,8 @@ use crate::gpu::{camera_bind_group_layout, create_uniform_buffer};
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct CameraUniform {
     pub view_proj: [[f32; 4]; 4],
+    pub view: [[f32; 4]; 4],
+    pub player_velocity: [f32; 4],
 }
 
 pub struct CameraState {
@@ -18,6 +20,8 @@ impl CameraState {
     pub fn new(device: &wgpu::Device) -> Self {
         let uniform = CameraUniform {
             view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+            view: Mat4::IDENTITY.to_cols_array_2d(),
+            player_velocity: [0.0, 0.0, 0.0, 0.0],
         };
         let uniform_buffer = create_uniform_buffer(device, &uniform, "Camera Uniform");
 
@@ -37,12 +41,14 @@ impl CameraState {
         }
     }
 
-    pub fn update(&self, queue: &wgpu::Queue, view_proj: Mat4) {
+    pub fn update(&self, queue: &wgpu::Queue, view_proj: Mat4, view: Mat4, player_velocity: Vec3) {
         queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::cast_slice(&[CameraUniform {
                 view_proj: view_proj.to_cols_array_2d(),
+                view: view.to_cols_array_2d(),
+                player_velocity: [player_velocity.x, player_velocity.y, player_velocity.z, 0.0],
             }]),
         );
     }

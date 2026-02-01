@@ -187,9 +187,11 @@ impl Renderer {
     pub fn render_frame(&mut self, game: &GameState) -> Result<(), wgpu::SurfaceError> {
         let aspect = self.ctx.config.width as f32 / self.ctx.config.height as f32;
         let projection = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 1.0, 10000.0);
-        let view_proj = projection * game.player.view_matrix();
+        let view = game.player.view_matrix();
+        let view_proj = projection * view;
 
-        self.camera.update(&self.ctx.queue, view_proj);
+        self.camera
+            .update(&self.ctx.queue, view_proj, view, game.player.velocity);
 
         let output = self.ctx.surface.get_current_texture()?;
         let swapchain_view = output
@@ -206,20 +208,50 @@ impl Renderer {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: self.postprocessor.offscreen_view(),
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.5,
-                            g: 0.7,
-                            b: 0.9,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: self.postprocessor.offscreen_view(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.5,
+                                g: 0.7,
+                                b: 0.9,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: self.postprocessor.position_view(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: self.postprocessor.velocity_view(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -239,14 +271,26 @@ impl Renderer {
                 .remote_players
                 .values()
                 .filter(|remote| remote.is_alive)
-                .map(|remote| (remote.model_matrix(), [1.0, 1.0, 1.0, 1.0_f32]))
+                .map(|remote| {
+                    (
+                        remote.model_matrix(),
+                        [1.0, 1.0, 1.0, 1.0_f32],
+                        remote.velocity,
+                    )
+                })
                 .collect();
 
             let dead_players: Vec<_> = game
                 .remote_players
                 .values()
                 .filter(|remote| !remote.is_alive)
-                .map(|remote| (remote.model_matrix(), [1.0, 1.0, 1.0, 1.0_f32]))
+                .map(|remote| {
+                    (
+                        remote.model_matrix(),
+                        [1.0, 1.0, 1.0, 1.0_f32],
+                        remote.velocity,
+                    )
+                })
                 .collect();
 
             self.player_renderer.render(

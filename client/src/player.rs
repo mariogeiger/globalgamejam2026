@@ -215,6 +215,8 @@ pub struct RemotePlayer {
     pub is_alive: bool,
     pub targeted_time: f32,
     pub mask: MaskType,
+    pub velocity: Vec3,
+    prev_position: Vec3,
 }
 
 impl RemotePlayer {
@@ -226,7 +228,17 @@ impl RemotePlayer {
             is_alive: true,
             targeted_time: 0.0,
             mask: MaskType::Ghost,
+            velocity: Vec3::ZERO,
+            prev_position: Vec3::ZERO,
         }
+    }
+
+    pub fn update_position(&mut self, new_position: Vec3, dt: f32) {
+        if dt > 0.0 {
+            self.velocity = (new_position - self.prev_position) / dt;
+        }
+        self.prev_position = self.position;
+        self.position = new_position;
     }
 
     pub fn model_matrix(&self) -> Mat4 {
