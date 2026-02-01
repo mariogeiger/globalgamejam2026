@@ -1,6 +1,24 @@
 # Global Game Jam 2026
 
-Multiplayer FPS game built with Rust and WebGPU, running in the browser via WebAssembly.
+A multiplayer free-for-all FPS game built with Rust and WebGPU, running entirely in the browser via WebAssembly.
+
+## About
+
+This game was created for [Global Game Jam 2026](https://globalgamejam.org/). It's a browser-based first-person shooter where players compete in a last-man-standing deathmatch.
+
+**Gameplay:**
+- Players spawn on the map during a **grace period** (10 seconds) where no damage is dealt
+- After the grace period, it's everyone for themselves
+- **Eliminate enemies by staring at them** - keep an opponent in your crosshair for 1 second to kill them
+- Be the last one standing to win
+- The winner is celebrated with a victory screen before the game restarts
+
+**Tech Stack:**
+- **Rust** - Game logic and server
+- **WebGPU/wgpu** - Modern GPU rendering
+- **WebAssembly** - Runs natively in browser
+- **WebRTC** - Peer-to-peer multiplayer
+- **glTF/GLB** - 3D model format for maps and characters
 
 ## Architecture
 
@@ -98,17 +116,15 @@ This runs `cargo fmt` before each commit.
 - **WASD** - Move
 - **Mouse** - Look around
 - **Space** - Jump
-- **Escape** - Release mouse
-- **Click** - Capture mouse
 
 ## Multiplayer
 
-Two players connect via WebRTC:
+Players connect via WebRTC for low-latency peer-to-peer gameplay:
 
-1. Both clients connect to the WebSocket signaling server
-2. First player waits, second player triggers pairing
-3. Signaling server facilitates SDP offer/answer exchange
-4. STUN server helps with NAT traversal
-5. Once connected, players communicate peer-to-peer via WebRTC DataChannel
+1. Players connect to the WebSocket signaling server
+2. The server pairs players and facilitates SDP offer/answer exchange
+3. STUN server helps with NAT traversal
+4. Once connected, players communicate directly via WebRTC DataChannel
+5. Game waits for players, then starts the grace period countdown
 
-First player joins Team A (blue), second joins Team B (red).
+Late joiners wait for the current round to finish before joining the next one.
