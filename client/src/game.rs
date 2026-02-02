@@ -366,7 +366,10 @@ impl GameState {
             }
         }
 
-        self.pending_kills.extend(new_kills);
+        if !new_kills.is_empty() {
+            self.pending_kills.extend(new_kills);
+            self.update_player_count_display();
+        }
     }
 
     /// Take pending kills to be sent over network
