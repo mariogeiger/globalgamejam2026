@@ -28,7 +28,7 @@ use glb::load_mesh_from_bytes;
 use input::InputState;
 use mesh::Mesh;
 use network::NetworkClient;
-use render::Renderer;
+use render::{Renderer, check_webgpu_support, show_webgpu_error};
 
 struct ClientState {
     renderer: Renderer,
@@ -64,6 +64,13 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
+            return;
+        }
+
+        // Check WebGPU support before proceeding
+        if !check_webgpu_support() {
+            log::error!("WebGPU is not supported in this browser");
+            show_webgpu_error();
             return;
         }
 

@@ -1,5 +1,6 @@
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
+use wasm_bindgen::JsCast;
 use winit::window::Window;
 
 use crate::assets::{EMBEDDED_MASK, EMBEDDED_PLAYER, EMBEDDED_TOMBSTONE};
@@ -8,6 +9,40 @@ use crate::game::GameState;
 use crate::glb::load_mesh_from_bytes;
 use crate::gpu::{camera_bind_group_layout, create_depth_texture};
 use crate::mesh::Mesh;
+
+/// Check if WebGPU is available in this browser
+pub fn check_webgpu_support() -> bool {
+    if let Some(window) = web_sys::window() {
+        let navigator = window.navigator();
+        // Check if navigator.gpu exists
+        let gpu = js_sys::Reflect::get(&navigator, &"gpu".into()).ok();
+        if let Some(gpu_val) = gpu
+            && !gpu_val.is_undefined()
+            && !gpu_val.is_null()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Show the WebGPU error overlay
+pub fn show_webgpu_error() {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        // Hide main menu
+        if let Some(menu) = doc.get_element_by_id("main-menu") {
+            let _ = menu
+                .dyn_ref::<web_sys::HtmlElement>()
+                .map(|e| e.style().set_property("display", "none").ok());
+        }
+        // Show error overlay
+        if let Some(overlay) = doc.get_element_by_id("webgpu-error") {
+            let _ = overlay
+                .dyn_ref::<web_sys::HtmlElement>()
+                .map(|e| e.style().set_property("display", "flex").ok());
+        }
+    }
+}
 
 pub mod camera;
 pub mod cone;

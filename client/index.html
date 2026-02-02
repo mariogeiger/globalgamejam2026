@@ -22,6 +22,53 @@
             height: 100%;
         }
         
+        /* WebGPU error overlay */
+        #webgpu-error {
+            position: fixed;
+            inset: 0;
+            background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 20000;
+            padding: 40px;
+        }
+        #webgpu-error .error-content {
+            max-width: 600px;
+            text-align: center;
+        }
+        #webgpu-error h1 {
+            font-size: 48px;
+            color: #f38ba8;
+            margin-bottom: 20px;
+        }
+        #webgpu-error p {
+            font-size: 18px;
+            color: #cdd6f4;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+        #webgpu-error .hint {
+            color: #a6adc8;
+            font-size: 14px;
+        }
+        #webgpu-error a {
+            color: #89b4fa;
+            text-decoration: underline;
+        }
+        #webgpu-error .browser-list {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin: 30px 0;
+        }
+        #webgpu-error .browser {
+            padding: 15px 25px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            color: #a6e3a1;
+        }
+        
         /* Full page menu */
         .full-page-menu {
             position: fixed;
@@ -385,6 +432,21 @@
     </style>
 </head>
 <body>
+    <div id="webgpu-error">
+        <div class="error-content">
+            <h1>WebGPU Not Available</h1>
+            <p>This game requires WebGPU, a modern graphics API for the web. Your browser doesn't support it yet.</p>
+            <div class="browser-list">
+                <div class="browser">Chrome 113+</div>
+                <div class="browser">Edge 113+</div>
+                <div class="browser">Firefox 139+</div>
+            </div>
+            <p>Please try one of the browsers above, or update your current browser to the latest version.</p>
+            <p class="hint">On Safari, WebGPU is available behind a feature flag in Technology Preview.<br>
+            On mobile, Chrome for Android 121+ supports WebGPU.</p>
+        </div>
+    </div>
+    
     <div id="main-menu" class="full-page-menu">
         <div class="menu-content">
             <h1 class="game-title">DUST2 FFA</h1>
