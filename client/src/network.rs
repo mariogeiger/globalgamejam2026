@@ -317,7 +317,7 @@ struct IceServer {
 }
 
 // Metered.ca TURN server API
-const METERED_API_URL: &str = "https://ggj26.metered.live/api/v1/turn/credentials?apiKey=BmUXvGJxg7VgrZsLmpgxUExn3Z4I6sqPfIObloH8b2GAy92J";
+const METERED_API_URL: &str = "https://ggj26.metered.live/api/v1/turn/credentials?apiKey=eb7440a97d22d69b25dfe8b64bbb3c79642f";
 
 fn base_ice_servers() -> Vec<IceServer> {
     let mut servers = vec![
