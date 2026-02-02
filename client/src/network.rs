@@ -236,12 +236,29 @@ impl NetworkClient {
         if let Ok(json) =
             serde_json::to_string(&PlayerStateMessage::new(position, yaw, pitch, mask))
         {
-            for peer in state.peers.values() {
-                if let Some(ref dc) = peer.state_channel
-                    && dc.ready_state() == web_sys::RtcDataChannelState::Open
-                {
-                    let _ = dc.send_with_str(&json);
+            let mut sent_count = 0;
+            let mut skipped = Vec::new();
+            for (&peer_id, peer) in &state.peers {
+                if let Some(ref dc) = peer.state_channel {
+                    if dc.ready_state() == web_sys::RtcDataChannelState::Open {
+                        let _ = dc.send_with_str(&json);
+                        sent_count += 1;
+                    } else {
+                        skipped.push((peer_id, format!("{:?}", dc.ready_state())));
+                    }
+                } else {
+                    skipped.push((peer_id, "no channel".to_string()));
                 }
+            }
+            if sent_count > 0 || !skipped.is_empty() {
+                log::debug!(
+                    "Sent state to {} peers, skipped: {:?}, pos: [{:.1}, {:.1}, {:.1}]",
+                    sent_count,
+                    skipped,
+                    position.x,
+                    position.y,
+                    position.z
+                );
             }
         }
     }
@@ -452,6 +469,10 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .await
                         .is_ok()
                     {
+                        log::info!(
+                            "Set remote description for peer {}, creating answer...",
+                            from_id
+                        );
                         apply_pending_candidates(&pc, &state, from_id).await;
                         if let Ok(answer) =
                             wasm_bindgen_futures::JsFuture::from(pc.create_answer()).await
@@ -463,10 +484,15 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                                 .await
                                 .is_ok()
                             {
+                                log::info!("Sending answer to peer {}", from_id);
                                 send_answer(&ws, from_id, &answer_sdp);
                             }
                         }
+                    } else {
+                        log::warn!("Failed to set remote description from peer {}", from_id);
                     }
+                } else {
+                    log::warn!("Received offer from unknown peer {}", from_id);
                 }
             }
             ServerMessage::Answer { from_id, sdp } => {
@@ -479,8 +505,15 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .await
                         .is_ok()
                     {
+                        log::info!(
+                            "Set remote description for peer {}, ice state: {:?}",
+                            from_id,
+                            pc.ice_connection_state()
+                        );
                         apply_pending_candidates(&pc, &state, from_id).await;
                     }
+                } else {
+                    log::warn!("Received answer from unknown peer {}", from_id);
                 }
             }
             ServerMessage::IceCandidate {
@@ -589,6 +622,12 @@ fn create_peer_connection(
         let ev: RtcDataChannelEvent = ev.unchecked_into();
         let dc = ev.channel();
         let label = dc.label();
+        log::info!(
+            "Received data channel '{}' from peer {}, state: {:?}",
+            label,
+            peer_id,
+            dc.ready_state()
+        );
 
         match label.as_str() {
             "state" => {
@@ -596,6 +635,9 @@ fn create_peer_connection(
                 let mut s = state_clone.borrow_mut();
                 if let Some(peer) = s.peers.get_mut(&peer_id) {
                     peer.state_channel = Some(dc);
+                    log::info!("State channel stored for peer {}", peer_id);
+                } else {
+                    log::warn!("Peer {} not found when storing state channel!", peer_id);
                 }
             }
             "events" => {
@@ -603,6 +645,9 @@ fn create_peer_connection(
                 let mut s = state_clone.borrow_mut();
                 if let Some(peer) = s.peers.get_mut(&peer_id) {
                     peer.events_channel = Some(dc);
+                    log::info!("Events channel stored for peer {}", peer_id);
+                } else {
+                    log::warn!("Peer {} not found when storing events channel!", peer_id);
                 }
             }
             _ => {
@@ -630,11 +675,28 @@ fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
     let onmsg = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: MessageEvent = ev.unchecked_into();
         let Some(data) = ev.data().as_string() else {
+            log::warn!(
+                "State channel: received non-string data from peer {}",
+                peer_id
+            );
             return;
         };
         let Ok(msg) = serde_json::from_str::<PlayerStateMessage>(&data) else {
+            log::warn!(
+                "State channel: failed to parse message from peer {}: {}",
+                peer_id,
+                data
+            );
             return;
         };
+
+        log::debug!(
+            "Received state from peer {}: pos=[{:.1}, {:.1}, {:.1}]",
+            peer_id,
+            msg.x,
+            msg.y,
+            msg.z
+        );
 
         let mut s = state_clone.borrow_mut();
         s.pending_events.push(NetworkEvent::PlayerState {

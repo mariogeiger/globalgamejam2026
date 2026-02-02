@@ -442,11 +442,23 @@ impl GameState {
                 self.update_player_count_display();
             }
             NetworkEvent::PeerJoined { id } => {
-                log::info!("Peer {} joined", id);
+                log::info!(
+                    "Peer {} joined, existing remote_players: {:?}",
+                    id,
+                    self.remote_players.keys().collect::<Vec<_>>()
+                );
                 // Remove mannequins when a real player connects
                 self.remote_players.remove(&u64::MAX);
                 self.remote_players.remove(&(u64::MAX - 1));
                 let remote = RemotePlayer::new();
+                log::info!(
+                    "Created RemotePlayer for peer {} at pos=[{:.1}, {:.1}, {:.1}], is_alive={}",
+                    id,
+                    remote.position.x,
+                    remote.position.y,
+                    remote.position.z,
+                    remote.is_alive
+                );
                 self.remote_players.insert(id, remote);
                 self.update_player_count_display();
             }
@@ -486,6 +498,20 @@ impl GameState {
                     remote.yaw = yaw;
                     remote.pitch = pitch;
                     remote.mask = MaskType::from_u8(mask);
+                    log::debug!(
+                        "Updated remote player {}: pos=[{:.1}, {:.1}, {:.1}], alive={}",
+                        id,
+                        position.x,
+                        position.y,
+                        position.z,
+                        remote.is_alive
+                    );
+                } else {
+                    log::warn!(
+                        "PlayerState for unknown peer {}, known peers: {:?}",
+                        id,
+                        self.remote_players.keys().collect::<Vec<_>>()
+                    );
                 }
             }
             NetworkEvent::PlayerKilled {

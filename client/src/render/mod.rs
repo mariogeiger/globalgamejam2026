@@ -276,6 +276,21 @@ impl Renderer {
 
             self.map_renderer.render(&mut pass, &self.camera.bind_group);
 
+            // Debug: log remote player info
+            for (id, remote) in &game.remote_players {
+                log::debug!(
+                    "Render: remote {} at [{:.1}, {:.1}, {:.1}], alive={}, vel=[{:.1}, {:.1}, {:.1}]",
+                    id,
+                    remote.position.x,
+                    remote.position.y,
+                    remote.position.z,
+                    remote.is_alive,
+                    remote.velocity.x,
+                    remote.velocity.y,
+                    remote.velocity.z,
+                );
+            }
+
             let alive_players: Vec<_> = game
                 .remote_players
                 .values()
@@ -288,6 +303,12 @@ impl Renderer {
                     )
                 })
                 .collect();
+
+            log::debug!(
+                "Rendering {} alive players, {} death markers",
+                alive_players.len(),
+                game.death_locations.len()
+            );
 
             let dead_players: Vec<_> = game
                 .death_locations
