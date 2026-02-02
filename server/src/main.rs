@@ -7,11 +7,13 @@ use tower_http::services::ServeDir;
 
 const PORT: u16 = 9000;
 const STUN_PORT: u16 = 3478;
+const GIT_HASH: &str = env!("GIT_HASH");
 
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    log::info!("=== Server version: {} ===", GIT_HASH);
     log::info!("Starting Rust game server...");
     log::info!("  HTTP+WS:   http://localhost:{}", PORT);
     log::info!("  STUN:      stun:localhost:{}", STUN_PORT);

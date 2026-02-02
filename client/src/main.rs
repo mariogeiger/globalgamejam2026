@@ -396,12 +396,16 @@ fn start_game() {
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+const GIT_HASH: &str = env!("GIT_HASH");
+
 #[wasm_bindgen(start)]
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
         web_sys::console::error_1(&info.to_string().into())
     }));
     console_log::init_with_level(log::Level::Info).expect("Logger init failed");
+
+    log::info!("=== Client version: {} ===", GIT_HASH);
 
     let event_loop = EventLoop::new().unwrap();
     #[allow(clippy::let_underscore_future)]

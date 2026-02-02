@@ -316,7 +316,10 @@ struct IceServer {
     credential: Option<String>,
 }
 
-fn ice_servers() -> Vec<IceServer> {
+// Metered.ca TURN server API
+const METERED_API_URL: &str = "https://ggj26.metered.live/api/v1/turn/credentials?apiKey=BmUXvGJxg7VgrZsLmpgxUExn3Z4I6sqPfIObloH8b2GAy92J";
+
+fn base_ice_servers() -> Vec<IceServer> {
     let mut servers = vec![
         // STUN servers for NAT discovery
         IceServer {
@@ -326,24 +329,6 @@ fn ice_servers() -> Vec<IceServer> {
             ],
             username: None,
             credential: None,
-        },
-        // Free TURN servers for relay - OpenRelay by Metered.ca
-        // https://www.metered.ca/tools/openrelay/
-        // Each server entry separate per their documentation
-        IceServer {
-            urls: vec!["turn:openrelay.metered.ca:80".to_string()],
-            username: Some("openrelayproject".to_string()),
-            credential: Some("openrelayproject".to_string()),
-        },
-        IceServer {
-            urls: vec!["turn:openrelay.metered.ca:443".to_string()],
-            username: Some("openrelayproject".to_string()),
-            credential: Some("openrelayproject".to_string()),
-        },
-        IceServer {
-            urls: vec!["turn:openrelay.metered.ca:443?transport=tcp".to_string()],
-            username: Some("openrelayproject".to_string()),
-            credential: Some("openrelayproject".to_string()),
         },
     ];
 
@@ -366,6 +351,65 @@ fn ice_servers() -> Vec<IceServer> {
             }
         }
     }
+    servers
+}
+
+async fn fetch_turn_servers() -> Vec<IceServer> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let mut servers = base_ice_servers();
+
+    // Fetch TURN credentials from Metered.ca API
+    if let Some(window) = web_sys::window() {
+        match JsFuture::from(window.fetch_with_str(METERED_API_URL)).await {
+            Ok(resp) => {
+                let resp: web_sys::Response = resp.unchecked_into();
+                if resp.ok() {
+                    if let Ok(json) = JsFuture::from(resp.json().unwrap()).await {
+                        // Parse the array of ICE servers
+                        if js_sys::Array::is_array(&json) {
+                            let arr = js_sys::Array::from(&json);
+                            for i in 0..arr.length() {
+                                let server = arr.get(i);
+                                if let Some(urls) = js_sys::Reflect::get(&server, &"urls".into())
+                                    .ok()
+                                    .and_then(|v| v.as_string())
+                                {
+                                    let username =
+                                        js_sys::Reflect::get(&server, &"username".into())
+                                            .ok()
+                                            .and_then(|v| v.as_string());
+                                    let credential =
+                                        js_sys::Reflect::get(&server, &"credential".into())
+                                            .ok()
+                                            .and_then(|v| v.as_string());
+
+                                    log::info!(
+                                        "Fetched TURN server: {} (has creds: {})",
+                                        urls,
+                                        username.is_some()
+                                    );
+
+                                    servers.push(IceServer {
+                                        urls: vec![urls],
+                                        username,
+                                        credential,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    log::warn!("Failed to fetch TURN credentials: {}", resp.status());
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to fetch TURN credentials: {:?}", e);
+            }
+        }
+    }
+
     servers
 }
 
@@ -408,7 +452,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                 update_status(&status);
 
                 for peer_info in peers {
-                    if let Ok(pc) = create_peer_connection(&ws, &state, peer_info.id) {
+                    if let Ok(pc) = create_peer_connection(&ws, &state, peer_info.id).await {
                         // Create unreliable channel for position updates
                         let state_init = RtcDataChannelInit::new();
                         state_init.set_ordered(false);
@@ -455,7 +499,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             ServerMessage::PeerJoined { peer_id } => {
                 log::info!("Peer {} joined", peer_id);
 
-                if let Ok(pc) = create_peer_connection(&ws, &state, peer_id) {
+                if let Ok(pc) = create_peer_connection(&ws, &state, peer_id).await {
                     let mut s = state.borrow_mut();
                     s.peers.insert(
                         peer_id,
@@ -612,7 +656,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
     });
 }
 
-fn create_peer_connection(
+async fn create_peer_connection(
     ws: &WebSocket,
     state: &StateRef,
     peer_id: PeerId,
@@ -620,7 +664,10 @@ fn create_peer_connection(
     let config = RtcConfiguration::new();
     let ice_servers_array = js_sys::Array::new();
 
-    for ice_server in ice_servers() {
+    // Fetch TURN servers from Metered.ca API
+    let servers = fetch_turn_servers().await;
+
+    for ice_server in &servers {
         let urls = js_sys::Array::new();
         for url in &ice_server.urls {
             urls.push(&url.clone().into());
@@ -640,7 +687,7 @@ fn create_peer_connection(
     }
 
     // Log configured ICE servers
-    for server in ice_servers() {
+    for server in &servers {
         log::info!(
             "ICE server: {:?} (has credentials: {})",
             server.urls,
