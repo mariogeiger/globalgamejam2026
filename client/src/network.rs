@@ -328,10 +328,11 @@ fn ice_servers() -> Vec<IceServer> {
             credential: None,
         },
         // Free TURN server for relay (needed when behind symmetric NAT)
-        // Using OpenRelay project: https://www.metered.ca/tools/openrelay/
+        // OpenRelay by Metered.ca: https://www.metered.ca/tools/openrelay/
         IceServer {
             urls: vec![
                 "turn:openrelay.metered.ca:80".to_string(),
+                "turn:openrelay.metered.ca:80?transport=tcp".to_string(),
                 "turn:openrelay.metered.ca:443".to_string(),
                 "turn:openrelay.metered.ca:443?transport=tcp".to_string(),
             ],
@@ -632,6 +633,14 @@ fn create_peer_connection(
         ice_servers_array.push(&server);
     }
 
+    // Log configured ICE servers
+    for server in ice_servers() {
+        log::info!(
+            "ICE server: {:?} (has credentials: {})",
+            server.urls,
+            server.username.is_some()
+        );
+    }
     log::info!(
         "Configured {} ICE servers for peer {}",
         ice_servers_array.length(),
@@ -668,13 +677,21 @@ fn create_peer_connection(
     let state_clone = state.clone();
     let onice = Closure::wrap(Box::new(move |ev: JsValue| {
         if let Some(pc) = ev.dyn_ref::<RtcPeerConnection>() {
-            match pc.ice_connection_state() {
+            let ice_state = pc.ice_connection_state();
+            let gathering_state = pc.ice_gathering_state();
+            log::info!(
+                "Peer {} ICE state: {:?}, gathering: {:?}",
+                peer_id,
+                ice_state,
+                gathering_state
+            );
+            match ice_state {
                 web_sys::RtcIceConnectionState::Connected => {
-                    log::info!("Peer {} connected", peer_id);
+                    log::info!("Peer {} CONNECTED!", peer_id);
                     update_peer_count(&state_clone);
                 }
                 web_sys::RtcIceConnectionState::Failed => {
-                    log::warn!("Peer {} connection failed", peer_id)
+                    log::error!("Peer {} connection FAILED!", peer_id)
                 }
                 web_sys::RtcIceConnectionState::Disconnected => {
                     log::warn!("Peer {} disconnected", peer_id)
