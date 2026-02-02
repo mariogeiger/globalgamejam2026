@@ -1,0 +1,55 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.1
+
+      - name: Build client
+        run: trunk build --release
+        working-directory: client
+
+      - name: Build server
+        run: cargo build -p server --release
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          ssh $SSH_TARGET "mkdir -p $DEPLOY_PATH/client/dist"
+          scp -r client/dist/* $SSH_TARGET:$DEPLOY_PATH/client/dist/
+          scp target/release/server $SSH_TARGET:$DEPLOY_PATH/server
+          ssh $SSH_TARGET "sudo systemctl restart ggj-server"
+
+      - name: Verify deployment
+        run: |
+          sleep 3
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "systemctl is-active ggj-server"
