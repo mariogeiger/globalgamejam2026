@@ -383,6 +383,53 @@
         #network-status .log-line.warning { color: #f9e2af; }
         #network-status .log-line.info { color: #89b4fa; }
         
+        /* Peer stats section - inside info panel */
+        #peer-stats-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #45475a;
+        }
+        #peer-stats-section .section-title {
+            color: #6c7086;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        #peer-stats-section .peer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 3px 0;
+            gap: 8px;
+            font-size: 11px;
+        }
+        #peer-stats-section .peer-id {
+            color: #cdd6f4;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #peer-stats-section .peer-type {
+            font-weight: bold;
+            min-width: 45px;
+            text-align: center;
+        }
+        #peer-stats-section .peer-rtt {
+            color: #a6adc8;
+            min-width: 40px;
+            text-align: right;
+        }
+        #peer-stats-section .type-direct { color: #a6e3a1; }
+        #peer-stats-section .type-stun { color: #f9e2af; }
+        #peer-stats-section .type-turn { color: #fab387; }
+        #peer-stats-section .no-peers {
+            color: #6c7086;
+            font-style: italic;
+            font-size: 11px;
+        }
+        
         /* Mask selector - bottom left */
         #mask-selector {
             position: fixed;
@@ -554,6 +601,12 @@
         <div class="row">
             <span class="label">Status</span>
             <span class="value" id="connection-status">Connecting...</span>
+        </div>
+        <div id="peer-stats-section">
+            <div class="section-title">Peers</div>
+            <div id="peer-stats-list">
+                <div class="no-peers">No peers connected</div>
+            </div>
         </div>
         <div id="network-status"></div>
     </div>

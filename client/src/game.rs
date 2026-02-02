@@ -9,7 +9,9 @@ use crate::collision::PhysicsWorld;
 use crate::config::*;
 use crate::input::InputState;
 use crate::mesh::Mesh;
-use crate::network::{GamePhase, NetworkEvent, PeerId};
+use crate::network::{
+    GamePhase, NetworkClient, NetworkEvent, PeerId, fetch_peer_stats, update_peer_stats_display,
+};
 use crate::player::{MaskType, Player, RemotePlayer, look_direction_from_angles};
 use winit::keyboard::KeyCode;
 
@@ -76,6 +78,8 @@ pub struct GameState {
     pub local_name: Option<String>,
     /// Local player's total kills
     pub local_kills: u32,
+    /// Last time peer stats were updated
+    last_stats_update: Instant,
 }
 
 impl GameState {
@@ -128,6 +132,7 @@ impl GameState {
             death_state: None,
             local_name: None,
             local_kills: 0,
+            last_stats_update: Instant::now(),
         }
     }
 
@@ -726,6 +731,45 @@ impl GameState {
             GamePhase::GracePeriod => update_countdown_display(self.phase_timer.ceil() as u32),
             GamePhase::Victory => update_victory_countdown(self.phase_timer.ceil() as u32),
             _ => {}
+        }
+    }
+
+    /// Update peer connection stats if enough time has passed
+    pub fn update_peer_stats(&mut self, network: &NetworkClient) {
+        const STATS_UPDATE_INTERVAL_SECS: f32 = 2.0;
+
+        if self.last_stats_update.elapsed().as_secs_f32() >= STATS_UPDATE_INTERVAL_SECS {
+            self.last_stats_update = Instant::now();
+
+            let peer_connections = network.get_peer_connections();
+            if peer_connections.is_empty() {
+                // Update UI to show no peers
+                update_peer_stats_display(&[]);
+                return;
+            }
+
+            // Collect peer names from remote players
+            let peer_data: Vec<_> = peer_connections
+                .into_iter()
+                .map(|(peer_id, pc)| {
+                    let name = self
+                        .remote_players
+                        .get(&peer_id)
+                        .and_then(|p| p.name.clone());
+                    (peer_id, name, pc)
+                })
+                .collect();
+
+            // Spawn async task to fetch stats
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut all_stats = Vec::new();
+                for (peer_id, name, pc) in peer_data {
+                    if let Some(stats) = fetch_peer_stats(peer_id, name, pc).await {
+                        all_stats.push(stats);
+                    }
+                }
+                update_peer_stats_display(&all_stats);
+            });
         }
     }
 

@@ -33,7 +33,7 @@ web-sys = { version = "0.3.85", features = [
     "RtcIceCandidateInit", "RtcDataChannel", "RtcDataChannelEvent", "RtcDataChannelInit",
     "RtcDataChannelState", "RtcSessionDescription", "RtcSessionDescriptionInit",
     "RtcSdpType", "RtcConfiguration", "RtcSignalingState", "RtcIceConnectionState",
-    "RtcIceGatheringState", "MessageEvent",
+    "RtcIceGatheringState", "MessageEvent", "RtcStatsReport",
     "HtmlTextAreaElement", "HtmlButtonElement", "HtmlElement", "HtmlInputElement",
     "WebSocket", "BinaryType", "CloseEvent", "ErrorEvent",
     "RtcIceServer", "MouseEvent", "PointerEvent", "KeyboardEvent", "console",

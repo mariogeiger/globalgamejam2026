@@ -261,6 +261,9 @@ impl ApplicationHandler for App {
                                     state.game.player.mask as u8,
                                 );
                             }
+
+                            // Update peer connection stats periodically
+                            state.game.update_peer_stats(network);
                         }
 
                         match state.renderer.render_frame(&state.game) {
