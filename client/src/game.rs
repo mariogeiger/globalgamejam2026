@@ -330,8 +330,8 @@ impl GameState {
                 continue;
             }
 
-            let enemy_center = remote.center_mass();
-            let to_enemy = enemy_center - eye_pos;
+            let enemy_head = remote.head_position();
+            let to_enemy = enemy_head - eye_pos;
             let distance = to_enemy.length();
 
             if distance < 1.0 {
@@ -343,7 +343,7 @@ impl GameState {
             let dot = look_dir.dot(to_enemy_normalized).clamp(-1.0, 1.0);
             let angle = dot.acos();
 
-            if angle < half_angle_rad && self.physics.is_visible(eye_pos, enemy_center) {
+            if angle < half_angle_rad && self.physics.is_visible(eye_pos, enemy_head) {
                 // Only accumulate targeting time if we can kill (Coward can't charge up)
                 if can_kill {
                     remote.targeted_time += dt;
@@ -419,6 +419,55 @@ impl GameState {
         }
 
         (max_progress, has_target)
+    }
+
+    /// Get list of enemies who are currently looking at us (potential threats)
+    /// Returns Vec of (peer_id, enemy_position) for each threat
+    pub fn get_threats(&self) -> Vec<(PeerId, Vec3)> {
+        if self.is_dead {
+            return Vec::new();
+        }
+
+        let my_head = self.player.eye_position();
+        let half_angle_rad = (TARGETING_ANGLE / 2.0).to_radians();
+        let mut threats = Vec::new();
+
+        for (&peer_id, remote) in &self.remote_players {
+            // Skip dead players (mannequins allowed for testing)
+            if !remote.is_alive {
+                continue;
+            }
+
+            // Coward mask cannot kill, so not a threat
+            if remote.mask == MaskType::Coward {
+                continue;
+            }
+
+            let enemy_eye = remote.eye_position();
+            let enemy_look_dir = look_direction_from_angles(remote.yaw, remote.pitch);
+
+            // Vector from enemy to us
+            let to_us = my_head - enemy_eye;
+            let distance = to_us.length();
+
+            if distance < 1.0 {
+                continue;
+            }
+
+            let to_us_normalized = to_us / distance;
+            let dot = enemy_look_dir.dot(to_us_normalized).clamp(-1.0, 1.0);
+            let angle = dot.acos();
+
+            // Check if we're within their targeting cone
+            if angle < half_angle_rad {
+                // Optionally check line-of-sight (enemy can see us)
+                if self.physics.is_visible(enemy_eye, my_head) {
+                    threats.push((peer_id, remote.head_position()));
+                }
+            }
+        }
+
+        threats
     }
 
     pub fn handle_network_event(&mut self, event: NetworkEvent, local_peer_id: Option<PeerId>) {

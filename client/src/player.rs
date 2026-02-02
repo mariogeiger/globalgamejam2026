@@ -275,7 +275,17 @@ impl RemotePlayer {
         Mat4::from_translation(self.position) * Mat4::from_rotation_y(-self.yaw)
     }
 
+    #[allow(dead_code)]
     pub fn center_mass(&self) -> Vec3 {
         self.position + Vec3::new(0.0, PLAYER_HEIGHT / 2.0, 0.0)
+    }
+
+    pub fn head_position(&self) -> Vec3 {
+        // Head is near eye level
+        self.position + Vec3::new(0.0, EYE_HEIGHT, 0.0)
+    }
+
+    pub fn eye_position(&self) -> Vec3 {
+        self.position + Vec3::new(0.0, EYE_HEIGHT, 0.0)
     }
 }

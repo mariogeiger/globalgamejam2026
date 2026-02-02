@@ -47,6 +47,10 @@ pub const HUNTER_KILL_DURATION: f32 = 0.7;
 pub const HUNTER_CONE_LENGTH: f32 = 5000.0;
 pub const HUNTER_CONE_ALPHA: f32 = 0.3;
 
+// Threat indicator (enemies looking at you)
+// Visual constants are in render/threat.wgsl (ARROW_SIZE, EDGE_MARGIN)
+pub const THREAT_ARROW_ALPHA: f32 = 0.8;
+
 // AFK timeout
 pub const AFK_TIMEOUT_SECONDS: f32 = 600.0; // 10 minutes
 

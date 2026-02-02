@@ -50,6 +50,7 @@ pub mod hud;
 pub mod map;
 pub mod player;
 pub mod postprocess;
+pub mod threat;
 pub mod traits;
 pub mod view_mask;
 
@@ -59,6 +60,7 @@ use hud::HudRenderer;
 use map::MapRenderer;
 use player::PlayerRenderer;
 use postprocess::{PostProcessApplyParams, PostProcessor};
+use threat::ThreatIndicatorRenderer;
 use traits::Renderable;
 use view_mask::{MASK_ANIM_DURATION, ViewMaskRenderer};
 
@@ -142,6 +144,7 @@ pub struct Renderer {
     postprocessor: PostProcessor,
     hud_renderer: HudRenderer,
     view_mask_renderer: ViewMaskRenderer,
+    threat_renderer: ThreatIndicatorRenderer,
 }
 
 impl Renderer {
@@ -199,6 +202,8 @@ impl Renderer {
         mask_mesh.translate(0.0, -3.0, 0.0);
         let view_mask_renderer = ViewMaskRenderer::new(&ctx.device, ctx.config.format, &mask_mesh);
 
+        let threat_renderer = ThreatIndicatorRenderer::new(&ctx.device, ctx.config.format);
+
         Self {
             ctx,
             camera,
@@ -209,6 +214,7 @@ impl Renderer {
             postprocessor,
             hud_renderer,
             view_mask_renderer,
+            threat_renderer,
         }
     }
 
@@ -432,6 +438,24 @@ impl Renderer {
                     has_target,
                 );
             }
+
+            // Render threat indicators for enemies looking at us
+            let threats = game.get_threats();
+            if !threats.is_empty() {
+                let view = game.player.view_matrix();
+                let threat_angles: Vec<f32> = threats
+                    .iter()
+                    .map(|(_, pos)| self.calculate_threat_angle(*pos, view, projection))
+                    .collect();
+                self.threat_renderer.render(
+                    &mut pass,
+                    &self.ctx.queue,
+                    self.ctx.config.width as f32,
+                    self.ctx.config.height as f32,
+                    &threat_angles,
+                    game.time,
+                );
+            }
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
@@ -449,5 +473,29 @@ impl Renderer {
 
     pub fn height(&self) -> u32 {
         self.ctx.config.height
+    }
+
+    /// Calculate screen-space angle for a threat indicator
+    /// Returns angle in radians where 0 = right, PI/2 = up
+    fn calculate_threat_angle(&self, world_pos: Vec3, view: Mat4, projection: Mat4) -> f32 {
+        // Transform world position to view space first
+        let view_pos = view * world_pos.extend(1.0);
+
+        // Transform to clip space
+        let view_proj = projection * view;
+        let clip_pos = view_proj * world_pos.extend(1.0);
+
+        // Check if behind camera
+        if clip_pos.w <= 0.0 {
+            // Behind camera - use view space position to calculate angle
+            // In view space: -Z is forward, X is right, Y is up
+            return view_pos.y.atan2(view_pos.x);
+        }
+
+        // Perspective divide to get NDC
+        let ndc = clip_pos.truncate() / clip_pos.w;
+
+        // Calculate angle from center of screen
+        ndc.y.atan2(ndc.x)
     }
 }
