@@ -327,15 +327,21 @@ fn ice_servers() -> Vec<IceServer> {
             username: None,
             credential: None,
         },
-        // Free TURN server for relay (needed when behind symmetric NAT)
-        // OpenRelay by Metered.ca: https://www.metered.ca/tools/openrelay/
+        // Free TURN servers for relay - OpenRelay by Metered.ca
+        // https://www.metered.ca/tools/openrelay/
+        // Each server entry separate per their documentation
         IceServer {
-            urls: vec![
-                "turn:openrelay.metered.ca:80".to_string(),
-                "turn:openrelay.metered.ca:80?transport=tcp".to_string(),
-                "turn:openrelay.metered.ca:443".to_string(),
-                "turn:openrelay.metered.ca:443?transport=tcp".to_string(),
-            ],
+            urls: vec!["turn:openrelay.metered.ca:80".to_string()],
+            username: Some("openrelayproject".to_string()),
+            credential: Some("openrelayproject".to_string()),
+        },
+        IceServer {
+            urls: vec!["turn:openrelay.metered.ca:443".to_string()],
+            username: Some("openrelayproject".to_string()),
+            credential: Some("openrelayproject".to_string()),
+        },
+        IceServer {
+            urls: vec!["turn:openrelay.metered.ca:443?transport=tcp".to_string()],
             username: Some("openrelayproject".to_string()),
             credential: Some("openrelayproject".to_string()),
         },
