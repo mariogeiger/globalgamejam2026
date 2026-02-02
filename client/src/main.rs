@@ -242,7 +242,7 @@ impl ApplicationHandler for App {
 
                         // --- Game update ---
                         state.debug.begin_section();
-                        state.game.update(&mut state.input, &mut state.debug);
+                        state.game.update(&mut state.input);
                         state.debug.end_update();
 
                         let (progress, has_target) = state.game.get_targeting_info();

@@ -7,7 +7,7 @@ use web_time::Instant;
 use crate::assets::{COWARD_IMAGE, GHOST_IMAGE, HUNTER_IMAGE};
 use crate::collision::PhysicsWorld;
 use crate::config::*;
-use crate::debug::{DebugOverlay, PhysicsDebugInfo};
+use crate::debug::PhysicsDebugInfo;
 use crate::input::InputState;
 use crate::mesh::Mesh;
 use crate::network::{
