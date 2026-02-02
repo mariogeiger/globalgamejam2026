@@ -28,8 +28,14 @@ pub async fn run_stun_server(port: u16) -> std::io::Result<()> {
         let magic_cookie = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
 
         if msg_type != STUN_BINDING_REQUEST || magic_cookie != STUN_MAGIC_COOKIE {
+            log::debug!("STUN: ignoring non-binding request from {}", src);
             continue;
         }
+
+        log::info!(
+            "STUN: Binding request from {} - responding with their public address",
+            src
+        );
 
         let mut transaction_id = [0u8; 12];
         transaction_id.copy_from_slice(&buf[8..20]);
@@ -38,6 +44,8 @@ pub async fn run_stun_server(port: u16) -> std::io::Result<()> {
 
         if let Err(e) = socket.send_to(&response, src).await {
             log::error!("STUN send error: {}", e);
+        } else {
+            log::debug!("STUN: Sent binding response to {}", src);
         }
     }
 }

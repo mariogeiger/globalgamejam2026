@@ -310,11 +310,37 @@ fn signaling_server_url() -> String {
     "wss://localhost/ws".to_string()
 }
 
-fn stun_servers() -> Vec<String> {
+struct IceServer {
+    urls: Vec<String>,
+    username: Option<String>,
+    credential: Option<String>,
+}
+
+fn ice_servers() -> Vec<IceServer> {
     let mut servers = vec![
-        "stun:stun.l.google.com:19302".to_string(),
-        "stun:stun1.l.google.com:19302".to_string(),
+        // STUN servers for NAT discovery
+        IceServer {
+            urls: vec![
+                "stun:stun.l.google.com:19302".to_string(),
+                "stun:stun1.l.google.com:19302".to_string(),
+            ],
+            username: None,
+            credential: None,
+        },
+        // Free TURN server for relay (needed when behind symmetric NAT)
+        // Using OpenRelay project: https://www.metered.ca/tools/openrelay/
+        IceServer {
+            urls: vec![
+                "turn:openrelay.metered.ca:80".to_string(),
+                "turn:openrelay.metered.ca:443".to_string(),
+                "turn:openrelay.metered.ca:443?transport=tcp".to_string(),
+            ],
+            username: Some("openrelayproject".to_string()),
+            credential: Some("openrelayproject".to_string()),
+        },
     ];
+
+    // Add server's own STUN if not localhost
     if let Some(window) = web_sys::window() {
         let location = window.location();
         if let Ok(href) = location.href()
@@ -322,7 +348,14 @@ fn stun_servers() -> Vec<String> {
         {
             let hostname = url.hostname();
             if !hostname.is_empty() && hostname != "localhost" {
-                servers.insert(0, format!("stun:{}:3478", hostname));
+                servers.insert(
+                    0,
+                    IceServer {
+                        urls: vec![format!("stun:{}:3478", hostname)],
+                        username: None,
+                        credential: None,
+                    },
+                );
             }
         }
     }
@@ -522,6 +555,11 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                 sdp_mid,
                 sdp_m_line_index,
             } => {
+                log::info!(
+                    "Received ICE candidate from peer {}: {}",
+                    from_id,
+                    candidate
+                );
                 let (has_remote, pc) = {
                     let s = state.borrow();
                     if let Some(peer) = s.peers.get(&from_id) {
@@ -530,12 +568,14 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                             Some(peer.pc.clone()),
                         )
                     } else {
+                        log::warn!("Received ICE candidate from unknown peer {}", from_id);
                         (false, None)
                     }
                 };
 
                 if has_remote {
                     if let Some(pc) = pc {
+                        log::info!("Applying ICE candidate from peer {} immediately", from_id);
                         add_ice_candidate(
                             &pc,
                             &IceCandidateData {
@@ -547,6 +587,10 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                         .await;
                     }
                 } else {
+                    log::info!(
+                        "Queueing ICE candidate from peer {} (no remote description yet)",
+                        from_id
+                    );
                     let mut s = state.borrow_mut();
                     if let Some(peer) = s.peers.get_mut(&from_id) {
                         peer.pending_candidates.push(IceCandidateData {
@@ -567,15 +611,33 @@ fn create_peer_connection(
     peer_id: PeerId,
 ) -> Result<RtcPeerConnection, JsValue> {
     let config = RtcConfiguration::new();
-    let ice_servers = js_sys::Array::new();
-    let urls = js_sys::Array::new();
-    for url in stun_servers() {
-        urls.push(&url.into());
+    let ice_servers_array = js_sys::Array::new();
+
+    for ice_server in ice_servers() {
+        let urls = js_sys::Array::new();
+        for url in &ice_server.urls {
+            urls.push(&url.clone().into());
+        }
+        let server = js_sys::Object::new();
+        js_sys::Reflect::set(&server, &"urls".into(), &urls)?;
+
+        // Add credentials for TURN servers
+        if let Some(ref username) = ice_server.username {
+            js_sys::Reflect::set(&server, &"username".into(), &username.clone().into())?;
+        }
+        if let Some(ref credential) = ice_server.credential {
+            js_sys::Reflect::set(&server, &"credential".into(), &credential.clone().into())?;
+        }
+
+        ice_servers_array.push(&server);
     }
-    let server = js_sys::Object::new();
-    js_sys::Reflect::set(&server, &"urls".into(), &urls)?;
-    ice_servers.push(&server);
-    config.set_ice_servers(&ice_servers);
+
+    log::info!(
+        "Configured {} ICE servers for peer {}",
+        ice_servers_array.length(),
+        peer_id
+    );
+    config.set_ice_servers(&ice_servers_array);
 
     let pc = RtcPeerConnection::new_with_configuration(&config)?;
 
@@ -583,6 +645,11 @@ fn create_peer_connection(
     let onicecandidate = Closure::wrap(Box::new(move |ev: JsValue| {
         let ev: RtcPeerConnectionIceEvent = ev.unchecked_into();
         if let Some(c) = ev.candidate() {
+            log::info!(
+                "Sending ICE candidate to peer {}: {}",
+                peer_id,
+                c.candidate()
+            );
             let msg = serde_json::json!({
                 "type": "ice-candidate",
                 "targetId": peer_id,
@@ -591,6 +658,8 @@ fn create_peer_connection(
                 "sdpMLineIndex": c.sdp_m_line_index()
             });
             let _ = ws_clone.send_with_str(&msg.to_string());
+        } else {
+            log::info!("ICE gathering complete for peer {}", peer_id);
         }
     }) as Box<dyn FnMut(JsValue)>);
     pc.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
@@ -768,6 +837,11 @@ async fn apply_pending_candidates(pc: &RtcPeerConnection, state: &StateRef, peer
             Vec::new()
         }
     };
+    log::info!(
+        "Applying {} pending ICE candidates for peer {}",
+        pending.len(),
+        peer_id
+    );
     for ice in pending {
         add_ice_candidate(pc, &ice).await;
     }
