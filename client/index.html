@@ -332,6 +332,15 @@
             font-size: 13px;
             z-index: 1000;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        #player-status-panel .player-name {
+            color: #f9e2af;
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        #player-status-panel .stats-row {
             display: flex;
             gap: 16px;
         }
@@ -516,21 +525,28 @@
     </div>
     
     <div id="player-status-panel">
-        <div class="stat">
-            <span class="stat-label">Alive</span>
-            <span class="stat-value alive" id="count-alive">0</span>
-        </div>
-        <div class="stat">
-            <span class="stat-label">Dead</span>
-            <span class="stat-value dead" id="count-dead">0</span>
-        </div>
-        <div class="stat">
-            <span class="stat-label">Spectators</span>
-            <span class="stat-value spectator" id="count-spectator">0</span>
+        <div class="player-name" id="local-player-name">-</div>
+        <div class="stats-row">
+            <div class="stat">
+                <span class="stat-label">Alive</span>
+                <span class="stat-value alive" id="count-alive">0</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Dead</span>
+                <span class="stat-value dead" id="count-dead">0</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Spectators</span>
+                <span class="stat-value spectator" id="count-spectator">0</span>
+            </div>
         </div>
     </div>
     
     <div id="info-panel">
+        <div class="row">
+            <span class="label">Peer ID</span>
+            <span class="value" id="local-peer-id">-</span>
+        </div>
         <div class="row">
             <span class="label">Position</span>
             <span class="value" id="local-pos">0, 0, 0</span>

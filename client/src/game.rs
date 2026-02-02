@@ -132,7 +132,8 @@ impl GameState {
     }
 
     pub fn set_local_name(&mut self, name: String) {
-        self.local_name = Some(name);
+        self.local_name = Some(name.clone());
+        update_player_name_display(&name);
     }
 
     fn extract_collision_data(mesh: &Mesh) -> (Vec<Vec3>, Vec<[u32; 3]>, (Vec3, Vec3)) {
@@ -431,6 +432,7 @@ impl GameState {
                     phase_time_remaining
                 );
                 self.local_peer_id = Some(id);
+                update_peer_id_display(id);
                 // If joining mid-game, become spectator instead of playing
                 let actual_phase = if phase == GamePhase::Playing {
                     log::info!("Joined mid-game, entering spectator mode");
@@ -716,6 +718,22 @@ impl GameState {
                 e.set_text_content(Some(&spectating.to_string()));
             }
         }
+    }
+}
+
+fn update_peer_id_display(id: PeerId) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(e) = doc.get_element_by_id("local-peer-id")
+    {
+        e.set_text_content(Some(&id.to_string()));
+    }
+}
+
+fn update_player_name_display(name: &str) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(e) = doc.get_element_by_id("local-player-name")
+    {
+        e.set_text_content(Some(name));
     }
 }
 
