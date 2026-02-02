@@ -221,7 +221,6 @@ impl NetworkClient {
         let ws_clone = ws.clone();
         set_callback(&ws, "onopen", move |_: JsValue| {
             log::info!("Connected to signaling server");
-            update_status("Connected to server");
             net_log(NetLogLevel::Success, "Connected to signaling server");
             let _ = ws_clone.send_with_str(r#"{"type":"join"}"#);
         });
@@ -240,12 +239,10 @@ impl NetworkClient {
 
         set_callback(&ws, "onerror", |_: JsValue| {
             log::error!("WebSocket error");
-            update_status("Connection error");
             net_log(NetLogLevel::Error, "WebSocket error - server unreachable?");
         });
         set_callback(&ws, "onclose", |_: JsValue| {
             log::info!("WebSocket closed");
-            update_status("Disconnected");
             net_log(NetLogLevel::Warning, "Disconnected from server");
         });
 
@@ -396,14 +393,85 @@ fn base_ice_servers() -> Vec<IceServer> {
     servers
 }
 
-async fn fetch_turn_servers() -> Vec<IceServer> {
+/// Fetch TURN credentials from our own server
+async fn fetch_self_hosted_turn() -> Option<IceServer> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window()?;
+    let location = window.location();
+    let href = location.href().ok()?;
+    let url = Url::new(&href).ok()?;
+    let hostname = url.hostname();
+
+    if hostname.is_empty() || hostname == "localhost" {
+        return None;
+    }
+
+    let protocol = url.protocol();
+    let creds_url = format!("{}//{}/turn-credentials", protocol, url.host());
+
+    match JsFuture::from(window.fetch_with_str(&creds_url)).await {
+        Ok(resp) => {
+            let resp: web_sys::Response = resp.unchecked_into();
+            if resp.ok()
+                && let Ok(json) = JsFuture::from(resp.json().unwrap()).await
+                && js_sys::Array::is_array(&json)
+            {
+                let arr = js_sys::Array::from(&json);
+                let first = arr.get(0);
+                if !first.is_undefined()
+                    && let Some(urls) = js_sys::Reflect::get(&first, &"urls".into())
+                        .ok()
+                        .and_then(|v| v.as_string())
+                {
+                    let username = js_sys::Reflect::get(&first, &"username".into())
+                        .ok()
+                        .and_then(|v| v.as_string());
+                    let credential = js_sys::Reflect::get(&first, &"credential".into())
+                        .ok()
+                        .and_then(|v| v.as_string());
+
+                    // Replace {host} placeholder with actual hostname
+                    let urls = urls.replace("{host}", &hostname);
+
+                    let server = IceServer {
+                        urls: vec![urls],
+                        username,
+                        credential,
+                    };
+                    log::info!("Fetched self-hosted TURN: {:?}", server.urls);
+                    return Some(server);
+                }
+            }
+        }
+        Err(e) => {
+            log::debug!("Self-hosted TURN fetch failed: {:?}", e);
+        }
+    }
+    None
+}
+
+async fn fetch_turn_servers(peer_id: PeerId) -> Vec<IceServer> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
     let mut servers = base_ice_servers();
-    net_log(NetLogLevel::Info, "Fetching TURN credentials...");
+    net_log(
+        NetLogLevel::Info,
+        &format!("Peer {}: Fetching TURN credentials...", peer_id),
+    );
 
-    // Fetch TURN credentials from Metered.ca API
+    // First try self-hosted TURN
+    if let Some(self_hosted) = fetch_self_hosted_turn().await {
+        servers.push(self_hosted);
+        net_log(
+            NetLogLevel::Success,
+            &format!("Peer {}: Got self-hosted TURN", peer_id),
+        );
+    }
+
+    // Then fetch TURN credentials from Metered.ca API as fallback
     if let Some(window) = web_sys::window() {
         match JsFuture::from(window.fetch_with_str(METERED_API_URL)).await {
             Ok(resp) => {
@@ -448,7 +516,10 @@ async fn fetch_turn_servers() -> Vec<IceServer> {
                             }
                             net_log(
                                 NetLogLevel::Success,
-                                &format!("Got {} TURN servers", turn_count),
+                                &format!(
+                                    "Peer {}: Got {} fallback TURN servers",
+                                    peer_id, turn_count
+                                ),
                             );
                         }
                     }
@@ -498,15 +569,6 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     });
                 }
 
-                let status = if peers.is_empty() {
-                    "Connected! Waiting for other players...".to_string()
-                } else if peers.len() == 1 {
-                    "Connected! 1 other player in game.".to_string()
-                } else {
-                    format!("Connected! {} other players in game.", peers.len())
-                };
-                update_status(&status);
-
                 for peer_info in peers {
                     if let Ok(pc) = create_peer_connection(&ws, &state, peer_info.id).await {
                         // Create unreliable channel for position updates
@@ -554,7 +616,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             }
             ServerMessage::PeerJoined { peer_id } => {
                 log::info!("Peer {} joined", peer_id);
-                net_log(NetLogLevel::Info, &format!("Peer {} joined game", peer_id));
+                net_log(NetLogLevel::Info, &format!("Peer {}: Joined", peer_id));
 
                 if let Ok(pc) = create_peer_connection(&ws, &state, peer_id).await {
                     let mut s = state.borrow_mut();
@@ -570,11 +632,10 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     s.pending_events
                         .push(NetworkEvent::PeerJoined { id: peer_id });
                 }
-                update_peer_count(&state);
             }
             ServerMessage::PeerLeft { peer_id } => {
                 log::info!("Peer {} left", peer_id);
-                net_log(NetLogLevel::Warning, &format!("Peer {} left game", peer_id));
+                net_log(NetLogLevel::Warning, &format!("Peer {}: Left", peer_id));
                 {
                     let mut s = state.borrow_mut();
                     if let Some(peer) = s.peers.remove(&peer_id) {
@@ -583,7 +644,6 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
                     s.pending_events
                         .push(NetworkEvent::PeerLeft { id: peer_id });
                 }
-                update_peer_count(&state);
             }
             ServerMessage::GamePhase {
                 phase,
@@ -723,7 +783,7 @@ async fn create_peer_connection(
     let ice_servers_array = js_sys::Array::new();
 
     // Fetch TURN servers from Metered.ca API
-    let servers = fetch_turn_servers().await;
+    let servers = fetch_turn_servers(peer_id).await;
 
     for ice_server in &servers {
         let urls = js_sys::Array::new();
@@ -785,7 +845,6 @@ async fn create_peer_connection(
     pc.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
     onicecandidate.forget();
 
-    let state_clone = state.clone();
     let onice = Closure::wrap(Box::new(move |ev: JsValue| {
         if let Some(pc) = ev.dyn_ref::<RtcPeerConnection>() {
             let ice_state = pc.ice_connection_state();
@@ -815,7 +874,6 @@ async fn create_peer_connection(
                         NetLogLevel::Success,
                         &format!("Peer {}: Connected!", peer_id),
                     );
-                    update_peer_count(&state_clone);
                 }
                 web_sys::RtcIceConnectionState::Failed => {
                     log::error!("Peer {} connection FAILED!", peer_id);
@@ -884,14 +942,12 @@ async fn create_peer_connection(
 
 /// Set up the unreliable "state" channel for position updates
 fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
-    let state_clone = state.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
         log::info!("State channel open with peer {}", peer_id);
         net_log(
             NetLogLevel::Success,
             &format!("Peer {}: Data channel ready", peer_id),
         );
-        update_peer_count(&state_clone);
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -1052,15 +1108,6 @@ fn set_callback<T: wasm_bindgen::convert::FromWasmAbi + 'static, F: FnMut(T) + '
     closure.forget();
 }
 
-fn update_status(status: &str) {
-    if let Some(elem) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("connection-status"))
-    {
-        elem.set_text_content(Some(status));
-    }
-}
-
 /// Log level for network status messages
 #[derive(Clone, Copy)]
 enum NetLogLevel {
@@ -1089,32 +1136,6 @@ fn net_log(level: NetLogLevel, msg: &str) {
         // Auto-scroll to bottom
         container.set_scroll_top(container.scroll_height());
     }
-}
-
-fn update_peer_count(state: &StateRef) {
-    let s = state.borrow();
-    let connected_count = s
-        .peers
-        .values()
-        .filter(|p| {
-            // Consider connected if state channel is open (primary channel for gameplay)
-            p.state_channel
-                .as_ref()
-                .is_some_and(|dc| dc.ready_state() == web_sys::RtcDataChannelState::Open)
-        })
-        .count();
-    let total_peers = s.peers.len();
-
-    let status = if total_peers == 0 {
-        "Waiting for other players...".to_string()
-    } else if connected_count < total_peers {
-        format!("Connecting... {}/{} peers", connected_count, total_peers)
-    } else {
-        // All peers connected, total_peers + 1 = total players including self
-        let total_players = total_peers + 1;
-        format!("Connected! {} players in game.", total_players)
-    };
-    update_status(&status);
 }
 
 /// Fetch stats from a single peer connection and parse the RTCStatsReport

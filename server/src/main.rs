@@ -1,27 +1,30 @@
 mod signaling;
-mod stun;
+mod turn;
 
-use axum::{Router, routing::get};
+use axum::{Json, Router, routing::get};
+use serde::Serialize;
 use std::net::SocketAddr;
 use tower_http::services::ServeDir;
 
 const PORT: u16 = 9000;
-const STUN_PORT: u16 = 3478;
+const TURN_PORT: u16 = 3478;
 const GIT_HASH: &str = env!("GIT_HASH");
 
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let public_ip = turn::get_public_ip();
+
     log::info!("=== Server version: {} ===", GIT_HASH);
     log::info!("Starting Rust game server...");
     log::info!("  HTTP+WS:   http://localhost:{}", PORT);
-    log::info!("  STUN:      stun:localhost:{}", STUN_PORT);
+    log::info!("  TURN/STUN: turn:{}:{}", public_ip, TURN_PORT);
 
-    // Start STUN server (UDP, runs in blocking thread)
+    // Start TURN/STUN server (UDP)
     tokio::spawn(async move {
-        if let Err(e) = stun::run_stun_server(STUN_PORT).await {
-            log::error!("STUN server error: {}", e);
+        if let Err(e) = turn::run_turn_server(TURN_PORT, public_ip).await {
+            log::error!("TURN server error: {}", e);
         }
     });
 
@@ -31,6 +34,7 @@ async fn main() {
     // Build router with WebSocket and static file serving
     let app = Router::new()
         .route("/ws", get(signaling::ws_handler))
+        .route("/turn-credentials", get(turn_credentials))
         .fallback_service(ServeDir::new("client/dist"));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
@@ -38,4 +42,19 @@ async fn main() {
     log::info!("Server listening on {}", addr);
 
     axum::serve(listener, app).await.unwrap();
+}
+
+#[derive(Serialize)]
+struct TurnCredential {
+    urls: String,
+    username: String,
+    credential: String,
+}
+
+async fn turn_credentials() -> Json<Vec<TurnCredential>> {
+    Json(vec![TurnCredential {
+        urls: format!("turn:{{host}}:{}", TURN_PORT),
+        username: turn::TURN_USERNAME.to_string(),
+        credential: turn::TURN_PASSWORD.to_string(),
+    }])
 }
