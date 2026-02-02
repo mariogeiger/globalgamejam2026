@@ -198,7 +198,8 @@ impl NetworkClient {
         let ws_clone = ws.clone();
         set_callback(&ws, "onopen", move |_: JsValue| {
             log::info!("Connected to signaling server");
-            update_status("Connected to server, joining game...");
+            update_status("Connected to server");
+            net_log(NetLogLevel::Success, "Connected to signaling server");
             let _ = ws_clone.send_with_str(r#"{"type":"join"}"#);
         });
 
@@ -216,11 +217,13 @@ impl NetworkClient {
 
         set_callback(&ws, "onerror", |_: JsValue| {
             log::error!("WebSocket error");
-            update_status("Connection error. Is the server running?");
+            update_status("Connection error");
+            net_log(NetLogLevel::Error, "WebSocket error - server unreachable?");
         });
         set_callback(&ws, "onclose", |_: JsValue| {
             log::info!("WebSocket closed");
-            update_status("Disconnected from server");
+            update_status("Disconnected");
+            net_log(NetLogLevel::Warning, "Disconnected from server");
         });
 
         Ok(Self { state, ws })
@@ -359,6 +362,7 @@ async fn fetch_turn_servers() -> Vec<IceServer> {
     use wasm_bindgen_futures::JsFuture;
 
     let mut servers = base_ice_servers();
+    net_log(NetLogLevel::Info, "Fetching TURN credentials...");
 
     // Fetch TURN credentials from Metered.ca API
     if let Some(window) = web_sys::window() {
@@ -370,6 +374,7 @@ async fn fetch_turn_servers() -> Vec<IceServer> {
                         // Parse the array of ICE servers
                         if js_sys::Array::is_array(&json) {
                             let arr = js_sys::Array::from(&json);
+                            let mut turn_count = 0;
                             for i in 0..arr.length() {
                                 let server = arr.get(i);
                                 if let Some(urls) = js_sys::Reflect::get(&server, &"urls".into())
@@ -391,6 +396,10 @@ async fn fetch_turn_servers() -> Vec<IceServer> {
                                         username.is_some()
                                     );
 
+                                    if urls.starts_with("turn") {
+                                        turn_count += 1;
+                                    }
+
                                     servers.push(IceServer {
                                         urls: vec![urls],
                                         username,
@@ -398,14 +407,22 @@ async fn fetch_turn_servers() -> Vec<IceServer> {
                                     });
                                 }
                             }
+                            net_log(
+                                NetLogLevel::Success,
+                                &format!("Got {} TURN servers", turn_count),
+                            );
                         }
                     }
                 } else {
-                    log::warn!("Failed to fetch TURN credentials: {}", resp.status());
+                    let msg = format!("TURN API error: {}", resp.status());
+                    log::warn!("{}", msg);
+                    net_log(NetLogLevel::Error, &msg);
                 }
             }
             Err(e) => {
-                log::warn!("Failed to fetch TURN credentials: {:?}", e);
+                let msg = format!("TURN fetch failed: {:?}", e);
+                log::warn!("{}", msg);
+                net_log(NetLogLevel::Error, "TURN fetch failed");
             }
         }
     }
@@ -498,6 +515,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             }
             ServerMessage::PeerJoined { peer_id } => {
                 log::info!("Peer {} joined", peer_id);
+                net_log(NetLogLevel::Info, &format!("Peer {} joined game", peer_id));
 
                 if let Ok(pc) = create_peer_connection(&ws, &state, peer_id).await {
                     let mut s = state.borrow_mut();
@@ -517,6 +535,7 @@ fn handle_signal(ws: &WebSocket, state: &StateRef, msg: ServerMessage) {
             }
             ServerMessage::PeerLeft { peer_id } => {
                 log::info!("Peer {} left", peer_id);
+                net_log(NetLogLevel::Warning, &format!("Peer {} left game", peer_id));
                 {
                     let mut s = state.borrow_mut();
                     if let Some(peer) = s.peers.remove(&peer_id) {
@@ -739,15 +758,39 @@ async fn create_peer_connection(
                 gathering_state
             );
             match ice_state {
+                web_sys::RtcIceConnectionState::New => {
+                    net_log(
+                        NetLogLevel::Info,
+                        &format!("Peer {}: ICE starting", peer_id),
+                    );
+                }
+                web_sys::RtcIceConnectionState::Checking => {
+                    net_log(
+                        NetLogLevel::Info,
+                        &format!("Peer {}: Trying connection...", peer_id),
+                    );
+                }
                 web_sys::RtcIceConnectionState::Connected => {
                     log::info!("Peer {} CONNECTED!", peer_id);
+                    net_log(
+                        NetLogLevel::Success,
+                        &format!("Peer {}: Connected!", peer_id),
+                    );
                     update_peer_count(&state_clone);
                 }
                 web_sys::RtcIceConnectionState::Failed => {
-                    log::error!("Peer {} connection FAILED!", peer_id)
+                    log::error!("Peer {} connection FAILED!", peer_id);
+                    net_log(
+                        NetLogLevel::Error,
+                        &format!("Peer {}: Connection failed", peer_id),
+                    );
                 }
                 web_sys::RtcIceConnectionState::Disconnected => {
-                    log::warn!("Peer {} disconnected", peer_id)
+                    log::warn!("Peer {} disconnected", peer_id);
+                    net_log(
+                        NetLogLevel::Warning,
+                        &format!("Peer {}: Disconnected", peer_id),
+                    );
                 }
                 _ => {}
             }
@@ -805,6 +848,10 @@ fn setup_state_channel(dc: &RtcDataChannel, state: &StateRef, peer_id: PeerId) {
     let state_clone = state.clone();
     let onopen = Closure::wrap(Box::new(move |_: JsValue| {
         log::info!("State channel open with peer {}", peer_id);
+        net_log(
+            NetLogLevel::Success,
+            &format!("Peer {}: Data channel ready", peer_id),
+        );
         update_peer_count(&state_clone);
     }) as Box<dyn FnMut(JsValue)>);
     dc.set_onopen(Some(onopen.as_ref().unchecked_ref()));
@@ -972,6 +1019,36 @@ fn update_status(status: &str) {
         .and_then(|d| d.get_element_by_id("connection-status"))
     {
         elem.set_text_content(Some(status));
+    }
+}
+
+/// Log level for network status messages
+#[derive(Clone, Copy)]
+enum NetLogLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+/// Add a line to the network status log in the UI
+fn net_log(level: NetLogLevel, msg: &str) {
+    let class = match level {
+        NetLogLevel::Info => "info",
+        NetLogLevel::Success => "success",
+        NetLogLevel::Warning => "warning",
+        NetLogLevel::Error => "error",
+    };
+
+    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+        && let Some(container) = doc.get_element_by_id("network-status")
+        && let Ok(div) = doc.create_element("div")
+    {
+        let _ = div.set_attribute("class", &format!("log-line {}", class));
+        div.set_text_content(Some(msg));
+        let _ = container.append_child(&div);
+        // Auto-scroll to bottom
+        container.set_scroll_top(container.scroll_height());
     }
 }
 

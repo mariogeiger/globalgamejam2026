@@ -484,6 +484,7 @@ impl GameState {
                         phase
                     };
                 self.set_phase(actual_phase, time_remaining);
+                self.update_player_count_display();
             }
             NetworkEvent::PlayerState {
                 id,
@@ -559,6 +560,7 @@ impl GameState {
                         self.pending_death_sounds += 1;
                     }
                 }
+                self.update_player_count_display();
             }
             NetworkEvent::PeerIntroduction { id, name } => {
                 log::info!("Peer {} is named '{}'", id, name);
@@ -674,14 +676,45 @@ impl GameState {
     }
 
     fn update_player_count_display(&self) {
-        let total = 1 + self.remote_players.len();
-        let alive = if self.is_dead { 0 } else { 1 }
-            + self.remote_players.values().filter(|p| p.is_alive).count();
+        // Filter out mannequins (debug entities with special IDs)
+        let is_real_player = |id: u64| id != u64::MAX && id != u64::MAX - 1;
 
-        if let Some(doc) = web_sys::window().and_then(|w| w.document())
-            && let Some(e) = doc.get_element_by_id("player-count")
-        {
-            e.set_text_content(Some(&format!("{} / {}", alive, total)));
+        // Count alive/dead remote players
+        let remote_alive = self
+            .remote_players
+            .iter()
+            .filter(|(id, p)| is_real_player(**id) && p.is_alive)
+            .count();
+        let remote_dead = self
+            .remote_players
+            .iter()
+            .filter(|(id, p)| is_real_player(**id) && !p.is_alive)
+            .count();
+
+        // Local player state
+        let is_spectating = self.phase == GamePhase::Spectating;
+        let local_alive = if !self.is_dead && !is_spectating {
+            1
+        } else {
+            0
+        };
+        let local_dead = if self.is_dead { 1 } else { 0 };
+        let local_spectating = if is_spectating { 1 } else { 0 };
+
+        let alive = remote_alive + local_alive;
+        let dead = remote_dead + local_dead;
+        let spectating = local_spectating; // Only local player can be spectating (we don't track remote)
+
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            if let Some(e) = doc.get_element_by_id("count-alive") {
+                e.set_text_content(Some(&alive.to_string()));
+            }
+            if let Some(e) = doc.get_element_by_id("count-dead") {
+                e.set_text_content(Some(&dead.to_string()));
+            }
+            if let Some(e) = doc.get_element_by_id("count-spectator") {
+                e.set_text_content(Some(&spectating.to_string()));
+            }
         }
     }
 }

@@ -273,6 +273,60 @@
             color: #f38ba8;
         }
         
+        /* Player status panel - top left */
+        #player-status-panel {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(30, 30, 46, 0.9);
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            font-size: 13px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            display: flex;
+            gap: 16px;
+        }
+        #player-status-panel .stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #player-status-panel .stat-label {
+            color: #6c7086;
+        }
+        #player-status-panel .stat-value {
+            font-weight: bold;
+            min-width: 16px;
+            text-align: center;
+        }
+        #player-status-panel .alive { color: #a6e3a1; }
+        #player-status-panel .dead { color: #f38ba8; }
+        #player-status-panel .spectator { color: #89b4fa; }
+        
+        /* Network status log */
+        #network-status {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #45475a;
+            font-size: 11px;
+            line-height: 1.4;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        #network-status .log-line {
+            color: #6c7086;
+            margin: 2px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #network-status .log-line.success { color: #a6e3a1; }
+        #network-status .log-line.error { color: #f38ba8; }
+        #network-status .log-line.warning { color: #f9e2af; }
+        #network-status .log-line.info { color: #89b4fa; }
+        
         /* Mask selector - bottom left */
         #mask-selector {
             position: fixed;
@@ -399,11 +453,22 @@
         </div>
     </div>
     
-    <div id="info-panel">
-        <div class="row">
-            <span class="label">Players</span>
-            <span class="value highlight" id="player-count">1 / 1</span>
+    <div id="player-status-panel">
+        <div class="stat">
+            <span class="stat-label">Alive</span>
+            <span class="stat-value alive" id="count-alive">0</span>
         </div>
+        <div class="stat">
+            <span class="stat-label">Dead</span>
+            <span class="stat-value dead" id="count-dead">0</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Spectators</span>
+            <span class="stat-value spectator" id="count-spectator">0</span>
+        </div>
+    </div>
+    
+    <div id="info-panel">
         <div class="row">
             <span class="label">Position</span>
             <span class="value" id="local-pos">0, 0, 0</span>
@@ -412,6 +477,7 @@
             <span class="label">Status</span>
             <span class="value" id="connection-status">Connecting...</span>
         </div>
+        <div id="network-status"></div>
     </div>
     
     <link data-trunk rel="rust" data-wasm-opt="z" />
