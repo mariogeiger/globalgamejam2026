@@ -304,6 +304,9 @@ impl GameState {
     fn check_respawn(&mut self) {
         let (bounds_min, bounds_max) = self.map_bounds;
         let pos = self.player.position;
+        let vel = self.player.velocity;
+
+        // Check if outside map bounds
         let outside = pos.x < bounds_min.x - RESPAWN_MARGIN
             || pos.x > bounds_max.x + RESPAWN_MARGIN
             || pos.y < bounds_min.y - RESPAWN_MARGIN
@@ -311,8 +314,17 @@ impl GameState {
             || pos.z < bounds_min.z - RESPAWN_MARGIN
             || pos.z > bounds_max.z + RESPAWN_MARGIN;
 
+        // Check for extreme falling velocity (stuck under map)
+        let extreme_velocity = vel.y < -MAX_FALL_VELOCITY;
+
         if outside {
             log::info!("Player fell out of map, respawning");
+            self.respawn_player();
+        } else if extreme_velocity {
+            log::info!(
+                "Player stuck with extreme velocity ({:.0}), respawning",
+                vel.y
+            );
             self.respawn_player();
         }
     }

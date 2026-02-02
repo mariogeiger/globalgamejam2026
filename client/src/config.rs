@@ -20,6 +20,7 @@ pub const PATH_HIT_MARGIN: f32 = 2.0;
 
 // Map
 pub const RESPAWN_MARGIN: f32 = 500.0;
+pub const MAX_FALL_VELOCITY: f32 = 5_000.0; // Respawn if falling faster than this
 pub const SPAWN_POINTS: &[[f32; 3]] = &[
     [-408.5, -127.0, 2414.2],
     [-196.2, -127.0, 2417.7],
