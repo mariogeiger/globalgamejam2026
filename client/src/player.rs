@@ -47,6 +47,10 @@ pub struct Player {
     pub on_ground: bool,
     pub mask: MaskType,
     pub last_mask: MaskType,
+    // Coward dash state
+    dash_timer: f32,      // remaining dash time (0 = not dashing)
+    dash_direction: Vec3, // direction to move during dash
+    dash_cooldown: f32,   // cooldown between dashes
 }
 
 impl Player {
@@ -59,7 +63,30 @@ impl Player {
             on_ground: false,
             mask: MaskType::Ghost,
             last_mask: MaskType::Ghost,
+            dash_timer: 0.0,
+            dash_direction: Vec3::ZERO,
+            dash_cooldown: 0.0,
         }
+    }
+
+    pub fn is_dashing(&self) -> bool {
+        self.dash_timer > 0.0
+    }
+
+    /// Start a dash toward the given target position
+    pub fn start_dash(&mut self, target: Vec3) {
+        let to_target = target - self.position;
+        let distance = to_target.length();
+        if distance > 0.0 {
+            self.dash_direction = to_target / distance;
+            self.dash_timer = distance / DASH_SPEED;
+            self.dash_cooldown = DASH_COOLDOWN;
+        }
+    }
+
+    /// Check if dash is ready (cooldown expired and on ground)
+    pub fn can_dash(&self) -> bool {
+        self.mask == MaskType::Coward && self.on_ground && self.dash_cooldown <= 0.0
     }
 
     pub fn set_mask(&mut self, mask: MaskType) {
@@ -89,10 +116,25 @@ impl Player {
     }
 
     pub fn update(&mut self, dt: f32, input: &mut InputState) {
+        // Update cooldown
+        if self.dash_cooldown > 0.0 {
+            self.dash_cooldown -= dt;
+        }
+
         let (dx, dy) = input.consume_mouse_delta();
         self.yaw += dx * MOUSE_SENSITIVITY;
         self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY).clamp(-1.5, 1.5);
 
+        // If dashing, move in dash direction and skip normal movement
+        if self.dash_timer > 0.0 {
+            self.dash_timer -= dt;
+            let move_amount = DASH_SPEED * dt;
+            self.position += self.dash_direction * move_amount;
+            self.velocity = Vec3::ZERO; // No velocity during dash
+            return;
+        }
+
+        // Normal movement
         let forward = self.forward_direction();
         let right = self.right_direction();
 
@@ -116,15 +158,10 @@ impl Player {
         self.velocity.x = move_dir.x * speed;
         self.velocity.z = move_dir.z * speed;
 
-        if self.on_ground && input.is_pressed(KeyCode::Space) {
+        // Jump (non-coward) or dash trigger is handled in game.rs
+        if self.on_ground && input.is_pressed(KeyCode::Space) && self.mask != MaskType::Coward {
             self.velocity.y = JUMP_VELOCITY;
             self.on_ground = false;
-
-            // Coward gets a directional jump boost
-            if self.mask == MaskType::Coward && move_dir != Vec3::ZERO {
-                self.velocity.x += move_dir.x * COWARD_JUMP_BOOST;
-                self.velocity.z += move_dir.z * COWARD_JUMP_BOOST;
-            }
         }
 
         if !self.on_ground {

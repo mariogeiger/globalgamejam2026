@@ -7,6 +7,7 @@ use web_time::Instant;
 use crate::assets::{COWARD_IMAGE, GHOST_IMAGE, HUNTER_IMAGE};
 use crate::collision::PhysicsWorld;
 use crate::config::*;
+use crate::debug::{DebugOverlay, PhysicsDebugInfo};
 use crate::input::InputState;
 use crate::mesh::Mesh;
 use crate::network::{
@@ -184,7 +185,7 @@ impl GameState {
         Self::get_spawn_point(idx)
     }
 
-    pub fn update(&mut self, input: &mut InputState) {
+    pub fn update(&mut self, input: &mut InputState, debug: &mut DebugOverlay) {
         let now = Instant::now();
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
@@ -211,6 +212,7 @@ impl GameState {
                 && let Some(ref death) = self.death_state
                 && death.time.elapsed().as_secs_f32() <= DEATH_GRACE_PERIOD
             {
+                let targeting_start = Instant::now();
                 self.update_targeting_from_state(
                     dt,
                     death.position,
@@ -218,17 +220,35 @@ impl GameState {
                     death.pitch,
                     death.mask,
                 );
+                debug.record_targeting(targeting_start.elapsed());
             }
             return;
         }
 
+        // Handle coward dash trigger before normal update
+        if self.player.can_dash() && input.is_pressed(KeyCode::Space) {
+            let look_dir = self.player.look_direction();
+            let origin = self.player.eye_position();
+            let target = self.physics.dash_target(origin, look_dir, DASH_DISTANCE);
+            // Adjust target to be at player feet level (origin was at eye)
+            let target = target - Vec3::new(0.0, EYE_HEIGHT, 0.0);
+            self.player.start_dash(target);
+        }
+
+        // Physics
+        let physics_start = Instant::now();
+
         let prev_pos = self.player.position;
         self.player.update(dt, input);
 
-        let desired_pos = self
-            .physics
-            .clamp_desired_to_path(prev_pos, self.player.position);
-        self.player.position = desired_pos;
+        // During dash, skip path clamping (we pre-calculated safe target)
+        // but always run ground/wall detection to prevent clipping through floor
+        if !self.player.is_dashing() {
+            let desired_pos = self
+                .physics
+                .clamp_desired_to_path(prev_pos, self.player.position);
+            self.player.position = desired_pos;
+        }
 
         let (new_pos, on_ground) = self
             .physics
@@ -238,10 +258,17 @@ impl GameState {
 
         self.check_respawn();
 
+        debug.record_physics(physics_start.elapsed());
+
+        // Targeting
+        let targeting_start = Instant::now();
+
         // Allow targeting during Playing phase and WaitingForPlayers (for testing mannequins)
         if self.phase == GamePhase::Playing || self.phase == GamePhase::WaitingForPlayers {
             self.update_targeting(dt);
         }
+
+        debug.record_targeting(targeting_start.elapsed());
     }
 
     fn update_mask_input(&mut self, input: &mut InputState) {
@@ -732,6 +759,11 @@ impl GameState {
             GamePhase::Victory => update_victory_countdown(self.phase_timer.ceil() as u32),
             _ => {}
         }
+    }
+
+    /// Get physics debug info for the debug overlay
+    pub fn get_physics_debug(&self) -> PhysicsDebugInfo {
+        self.physics.get_debug_info(self.player.position).into()
     }
 
     /// Update peer connection stats if enough time has passed

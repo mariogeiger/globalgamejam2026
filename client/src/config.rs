@@ -42,8 +42,12 @@ pub const DEATH_GRACE_PERIOD: f32 = 0.05; // 50ms for continued targeting after 
 
 // Mask system
 pub const COWARD_SPEED_MULTIPLIER: f32 = 1.5;
-pub const COWARD_JUMP_BOOST: f32 = 10000.0; // Horizontal velocity boost 
 pub const HUNTER_KILL_DURATION: f32 = 0.7;
+
+// Coward dash (directional blink in look direction)
+pub const DASH_DISTANCE: f32 = 300.0; // max distance
+pub const DASH_SPEED: f32 = 1500.0; // units/second
+pub const DASH_COOLDOWN: f32 = 0.0; // seconds between dashes
 pub const HUNTER_CONE_LENGTH: f32 = 5000.0;
 pub const HUNTER_CONE_ALPHA: f32 = 0.3;
 

@@ -5,6 +5,14 @@ use parry3d::shape::TriMesh;
 
 use crate::config::*;
 
+/// Debug information from collision detection
+#[derive(Clone, Default)]
+pub struct CollisionDebug {
+    pub on_ground: bool,
+    pub ground_distance: Option<f32>,
+    pub wall_distances: [Option<f32>; 4], // +X, -X, +Z, -Z
+}
+
 pub struct PhysicsWorld {
     trimesh: TriMesh,
 }
@@ -31,6 +39,23 @@ impl PhysicsWorld {
         );
         self.trimesh
             .cast_ray(&Pose3::IDENTITY, &ray, max_dist, true)
+    }
+
+    /// Calculate dash target: raycast in direction, return safe destination
+    pub fn dash_target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Vec3 {
+        const WALL_MARGIN: f32 = 20.0; // Stop before hitting wall
+
+        match self.cast_ray(origin, direction, max_distance) {
+            Some(hit_dist) => {
+                // Hit something, stop before it
+                let safe_dist = (hit_dist - WALL_MARGIN).max(0.0);
+                origin + direction * safe_dist
+            }
+            None => {
+                // No hit, go full distance
+                origin + direction * max_distance
+            }
+        }
     }
 
     pub fn is_visible(&self, from: Vec3, to: Vec3) -> bool {
@@ -116,5 +141,34 @@ impl PhysicsWorld {
         }
 
         (final_pos, on_ground)
+    }
+
+    /// Get debug information about collision state at a position
+    pub fn get_debug_info(&self, position: Vec3) -> CollisionDebug {
+        let half_width = PLAYER_WIDTH / 2.0;
+
+        // Ground check
+        let ground_origin = position + Vec3::new(0.0, STEP_OVER_HEIGHT, 0.0);
+        let ground_distance = self.cast_ray(ground_origin, Vec3::NEG_Y, PLAYER_HEIGHT);
+        let on_ground = ground_distance
+            .map(|d| d < STEP_OVER_HEIGHT + GROUND_SNAP_MARGIN)
+            .unwrap_or(false);
+
+        // Wall distances in 4 directions: +X, -X, +Z, -Z
+        let wall_origin = position + Vec3::new(0.0, STEP_OVER_HEIGHT, 0.0);
+        let directions = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ];
+        let wall_distances =
+            directions.map(|dir| self.cast_ray(wall_origin, dir, half_width * 2.0));
+
+        CollisionDebug {
+            on_ground,
+            ground_distance,
+            wall_distances,
+        }
     }
 }

@@ -11,6 +11,7 @@ mod assets;
 mod audio;
 mod collision;
 mod config;
+mod debug;
 mod game;
 mod glb;
 mod gpu;
@@ -23,6 +24,7 @@ mod render;
 use assets::EMBEDDED_MAP;
 use audio::Audio;
 use config::{AFK_TIMEOUT_SECONDS, DEBUG_MANNEQUINS};
+use debug::DebugOverlay;
 use game::{GameState, init_mask_images};
 use glb::load_mesh_from_bytes;
 use input::InputState;
@@ -37,6 +39,7 @@ struct ClientState {
     network: Option<NetworkClient>,
     audio: Audio,
     player_name: Option<String>,
+    debug: DebugOverlay,
 }
 
 struct App {
@@ -113,6 +116,7 @@ impl ApplicationHandler for App {
             let input = InputState::new();
 
             let audio = Audio::new();
+            let debug = DebugOverlay::new();
             let state = ClientState {
                 renderer,
                 game,
@@ -120,6 +124,7 @@ impl ApplicationHandler for App {
                 network: None,
                 audio,
                 player_name: None,
+                debug,
             };
 
             STATE.with(|s| *s.borrow_mut() = Some(state));
@@ -215,9 +220,11 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 STATE.with(|s| {
                     if let Some(state) = s.borrow_mut().as_mut() {
-                        // Only process network if connected
+                        state.debug.begin_frame();
+
+                        // --- Network poll ---
+                        state.debug.begin_section();
                         if let Some(ref network) = state.network {
-                            // Check AFK timeout
                             if network.is_connected()
                                 && state.input.seconds_since_activity() > AFK_TIMEOUT_SECONDS
                             {
@@ -227,13 +234,16 @@ impl ApplicationHandler for App {
                             }
 
                             let local_peer_id = network.local_id();
-
                             for event in network.poll_events() {
                                 state.game.handle_network_event(event, local_peer_id);
                             }
                         }
+                        state.debug.end_net_poll();
 
-                        state.game.update(&mut state.input);
+                        // --- Game update ---
+                        state.debug.begin_section();
+                        state.game.update(&mut state.input, &mut state.debug);
+                        state.debug.end_update();
 
                         let (progress, has_target) = state.game.get_targeting_info();
                         state.audio.update_charge(has_target, progress);
@@ -242,13 +252,13 @@ impl ApplicationHandler for App {
                             state.audio.play_death();
                         }
 
+                        // --- Network send ---
+                        state.debug.begin_section();
                         if let Some(ref network) = state.network {
-                            // Send any kills we made this frame
                             for victim_id in state.game.take_pending_kills() {
                                 network.send_kill(victim_id);
                             }
 
-                            // Notify server if we just died
                             if state.game.take_death_notification() {
                                 network.notify_death();
                             }
@@ -262,10 +272,12 @@ impl ApplicationHandler for App {
                                 );
                             }
 
-                            // Update peer connection stats periodically
                             state.game.update_peer_stats(network);
                         }
+                        state.debug.end_net_send();
 
+                        // --- Render ---
+                        state.debug.begin_section();
                         match state.renderer.render_frame(&state.game) {
                             Ok(_) => state.renderer.request_redraw(),
                             Err(wgpu::SurfaceError::Lost) => {
@@ -275,6 +287,15 @@ impl ApplicationHandler for App {
                             Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                             Err(e) => log::error!("Render error: {:?}", e),
                         }
+                        state.debug.end_render();
+
+                        // --- Debug display update ---
+                        let physics_debug = state.game.get_physics_debug();
+                        state.debug.update_display(
+                            state.game.player.position,
+                            state.game.player.velocity,
+                            &physics_debug,
+                        );
 
                         state.input.end_frame();
                     }
