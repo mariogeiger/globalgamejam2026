@@ -15,10 +15,7 @@ fn set_element_text(id: &str, text: &str) {
 pub struct FrameProfile {
     pub frame_time: Duration,
     pub update_time: Duration,
-    pub physics_time: Duration,
-    pub targeting_time: Duration,
-    pub net_poll_time: Duration,
-    pub net_send_time: Duration,
+    pub network_time: Duration,
     pub render_time: Duration,
 }
 
@@ -52,10 +49,7 @@ impl ProfileStats {
         if self.created_at.elapsed().as_secs_f32() >= WORST_TRACKING_DELAY_SECS {
             self.worst.frame_time = self.worst.frame_time.max(profile.frame_time);
             self.worst.update_time = self.worst.update_time.max(profile.update_time);
-            self.worst.physics_time = self.worst.physics_time.max(profile.physics_time);
-            self.worst.targeting_time = self.worst.targeting_time.max(profile.targeting_time);
-            self.worst.net_poll_time = self.worst.net_poll_time.max(profile.net_poll_time);
-            self.worst.net_send_time = self.worst.net_send_time.max(profile.net_send_time);
+            self.worst.network_time = self.worst.network_time.max(profile.network_time);
             self.worst.render_time = self.worst.render_time.max(profile.render_time);
         }
 
@@ -84,20 +78,14 @@ impl ProfileStats {
         for i in 0..count {
             sum.frame_time += self.samples[i].frame_time;
             sum.update_time += self.samples[i].update_time;
-            sum.physics_time += self.samples[i].physics_time;
-            sum.targeting_time += self.samples[i].targeting_time;
-            sum.net_poll_time += self.samples[i].net_poll_time;
-            sum.net_send_time += self.samples[i].net_send_time;
+            sum.network_time += self.samples[i].network_time;
             sum.render_time += self.samples[i].render_time;
         }
 
         FrameProfile {
             frame_time: sum.frame_time / count as u32,
             update_time: sum.update_time / count as u32,
-            physics_time: sum.physics_time / count as u32,
-            targeting_time: sum.targeting_time / count as u32,
-            net_poll_time: sum.net_poll_time / count as u32,
-            net_send_time: sum.net_send_time / count as u32,
+            network_time: sum.network_time / count as u32,
             render_time: sum.render_time / count as u32,
         }
     }
@@ -144,22 +132,15 @@ impl DebugOverlay {
         self.section_start = Some(Instant::now());
     }
 
-    /// End timing and record to the specified field
-    pub fn end_net_poll(&mut self) {
-        if let Some(start) = self.section_start.take() {
-            self.current.net_poll_time = start.elapsed();
-        }
-    }
-
     pub fn end_update(&mut self) {
         if let Some(start) = self.section_start.take() {
             self.current.update_time = start.elapsed();
         }
     }
 
-    pub fn end_net_send(&mut self) {
+    pub fn end_network(&mut self) {
         if let Some(start) = self.section_start.take() {
-            self.current.net_send_time = start.elapsed();
+            self.current.network_time += start.elapsed();
         }
     }
 
@@ -167,16 +148,6 @@ impl DebugOverlay {
         if let Some(start) = self.section_start.take() {
             self.current.render_time = start.elapsed();
         }
-    }
-
-    /// Record physics timing (called from game update)
-    pub fn record_physics(&mut self, duration: Duration) {
-        self.current.physics_time = duration;
-    }
-
-    /// Record targeting timing (called from game update)
-    pub fn record_targeting(&mut self, duration: Duration) {
-        self.current.targeting_time = duration;
     }
 
     /// Update the debug display (throttled to 10Hz)
@@ -245,26 +216,14 @@ impl DebugOverlay {
         let to_ms = |d: Duration| d.as_secs_f64() * 1000.0;
 
         let fmt2 = |a: Duration, w: Duration| format!("{:.2} ({:.2})", to_ms(a), to_ms(w));
-        let fmt3 = |a: Duration, w: Duration| format!("{:.3} ({:.3})", to_ms(a), to_ms(w));
 
-        set_element_text("dbg-frame-time", &fmt2(avg.frame_time, worst.frame_time));
-        set_element_text("dbg-update-time", &fmt2(avg.update_time, worst.update_time));
+        set_element_text("dbg-game-time", &fmt2(avg.update_time, worst.update_time));
         set_element_text(
-            "dbg-physics-time",
-            &fmt2(avg.physics_time, worst.physics_time),
+            "dbg-network-time",
+            &fmt2(avg.network_time, worst.network_time),
         );
-        set_element_text(
-            "dbg-targeting-time",
-            &fmt3(avg.targeting_time, worst.targeting_time),
-        );
-        set_element_text(
-            "dbg-net-poll-time",
-            &fmt3(avg.net_poll_time, worst.net_poll_time),
-        );
-        set_element_text(
-            "dbg-net-send-time",
-            &fmt3(avg.net_send_time, worst.net_send_time),
-        );
+
+        // Render
         set_element_text("dbg-render-time", &fmt2(avg.render_time, worst.render_time));
 
         // FPS

@@ -185,7 +185,7 @@ impl GameState {
         Self::get_spawn_point(idx)
     }
 
-    pub fn update(&mut self, input: &mut InputState, debug: &mut DebugOverlay) {
+    pub fn update(&mut self, input: &mut InputState) {
         let now = Instant::now();
         let dt = (now - self.last_update).as_secs_f32().min(0.1);
         self.last_update = now;
@@ -212,7 +212,6 @@ impl GameState {
                 && let Some(ref death) = self.death_state
                 && death.time.elapsed().as_secs_f32() <= DEATH_GRACE_PERIOD
             {
-                let targeting_start = Instant::now();
                 self.update_targeting_from_state(
                     dt,
                     death.position,
@@ -220,7 +219,6 @@ impl GameState {
                     death.pitch,
                     death.mask,
                 );
-                debug.record_targeting(targeting_start.elapsed());
             }
             return;
         }
@@ -236,8 +234,6 @@ impl GameState {
         }
 
         // Physics
-        let physics_start = Instant::now();
-
         let prev_pos = self.player.position;
         self.player.update(dt, input);
 
@@ -258,17 +254,10 @@ impl GameState {
 
         self.check_respawn();
 
-        debug.record_physics(physics_start.elapsed());
-
-        // Targeting
-        let targeting_start = Instant::now();
-
-        // Allow targeting during Playing phase and WaitingForPlayers (for testing mannequins)
+        // Targeting - allow during Playing phase and WaitingForPlayers (for testing mannequins)
         if self.phase == GamePhase::Playing || self.phase == GamePhase::WaitingForPlayers {
             self.update_targeting(dt);
         }
-
-        debug.record_targeting(targeting_start.elapsed());
     }
 
     fn update_mask_input(&mut self, input: &mut InputState) {

@@ -238,7 +238,7 @@ impl ApplicationHandler for App {
                                 state.game.handle_network_event(event, local_peer_id);
                             }
                         }
-                        state.debug.end_net_poll();
+                        state.debug.end_network();
 
                         // --- Game update ---
                         state.debug.begin_section();
@@ -274,7 +274,7 @@ impl ApplicationHandler for App {
 
                             state.game.update_peer_stats(network);
                         }
-                        state.debug.end_net_send();
+                        state.debug.end_network();
 
                         // --- Render ---
                         state.debug.begin_section();
