@@ -77,7 +77,7 @@ pub async fn fetch_peer_stats(
         }
     });
 
-    // Second pass: find the local candidate to get the connection type and TURN server URL
+    // Second pass: find the local candidate to get the connection type and server URL
     if let Some(ref candidate_id) = local_candidate_id {
         stats_map.for_each(&mut |value, key| {
             if key.as_string().as_deref() == Some(candidate_id.as_str())
@@ -97,7 +97,7 @@ pub async fn fetch_peer_stats(
                         }
                     }
                     "prflx" => {
-                        // Extract STUN server URL for peer-reflexive candidates
+                        // Extract URL for peer-reflexive candidates (may be STUN server used during checks)
                         if let Ok(url) = js_sys::Reflect::get(&value, &"url".into())
                             && let Some(url_str) = url.as_string()
                         {
@@ -200,15 +200,23 @@ pub fn update_peer_stats_display(stats: &[PeerStats]) {
             ConnectionType::Host | ConnectionType::Unknown => None,
             ConnectionType::Srflx(url) | ConnectionType::Prflx(url) => {
                 // Extract just the hostname:port from stun:hostname:port
-                url.strip_prefix("stun:")
-                    .or_else(|| url.strip_prefix("stuns:"))
-                    .and_then(|s| s.split('?').next())
+                if url != "unknown" {
+                    url.strip_prefix("stun:")
+                        .or_else(|| url.strip_prefix("stuns:"))
+                        .and_then(|s| s.split('?').next())
+                } else {
+                    None
+                }
             }
             ConnectionType::Relay(url) => {
                 // Extract just the hostname:port from turn:hostname:port?transport=udp
-                url.strip_prefix("turn:")
-                    .or_else(|| url.strip_prefix("turns:"))
-                    .and_then(|s| s.split('?').next())
+                if url != "unknown" {
+                    url.strip_prefix("turn:")
+                        .or_else(|| url.strip_prefix("turns:"))
+                        .and_then(|s| s.split('?').next())
+                } else {
+                    None
+                }
             }
         } {
             let url_span = web_sys::window()
