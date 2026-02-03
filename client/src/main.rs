@@ -224,7 +224,7 @@ impl ApplicationHandler for App {
 
                         // --- Network poll ---
                         state.debug.begin_section();
-                        if let Some(ref network) = state.network {
+                        if let Some(ref mut network) = state.network {
                             if network.is_connected()
                                 && state.input.seconds_since_activity() > AFK_TIMEOUT_SECONDS
                             {
