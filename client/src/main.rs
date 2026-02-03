@@ -248,6 +248,10 @@ impl ApplicationHandler for App {
                         let (progress, has_target) = state.game.get_targeting_info();
                         state.audio.update_charge(has_target, progress);
 
+                        // Play sound when someone is targeting us
+                        let is_being_targeted = !state.game.get_threats().is_empty();
+                        state.audio.update_threat(is_being_targeted);
+
                         for _ in 0..state.game.take_death_sounds() {
                             state.audio.play_death();
                         }
