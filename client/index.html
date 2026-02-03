@@ -285,7 +285,7 @@
             position: fixed;
             bottom: 10px;
             right: 10px;
-            background: rgba(30, 30, 46, 0.9);
+            background: rgba(24, 24, 37, 0.95);
             padding: 12px 16px;
             border-radius: 8px;
             font-family: 'SF Mono', Monaco, 'Consolas', monospace;
@@ -300,12 +300,12 @@
             gap: 12px;
         }
         #info-panel .label {
-            color: #6c7086;
+            color: #cdd6f4;
             min-width: 60px;
             flex-shrink: 0;
         }
         #info-panel .value {
-            color: #cdd6f4;
+            color: #ffffff;
             text-align: right;
             flex: 1;
         }
@@ -322,6 +322,13 @@
         #debug-section {
             font-size: 11px;
         }
+        #debug-section .section-title {
+            color: #cdd6f4;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
         #debug-section .row {
             margin: 2px 0;
         }
@@ -331,7 +338,7 @@
             position: fixed;
             top: 10px;
             left: 10px;
-            background: rgba(30, 30, 46, 0.9);
+            background: rgba(24, 24, 37, 0.95);
             padding: 10px 14px;
             border-radius: 8px;
             font-family: 'SF Mono', Monaco, 'Consolas', monospace;
@@ -378,7 +385,7 @@
             overflow-y: auto;
         }
         #network-status .log-line {
-            color: #6c7086;
+            color: #cdd6f4;
             margin: 2px 0;
             white-space: nowrap;
             overflow: hidden;
@@ -393,10 +400,9 @@
         #peer-stats-section {
             margin-top: 8px;
             padding-top: 8px;
-            border-top: 1px solid #45475a;
         }
         #peer-stats-section .section-title {
-            color: #6c7086;
+            color: #cdd6f4;
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -411,7 +417,7 @@
             font-size: 11px;
         }
         #peer-stats-section .peer-id {
-            color: #cdd6f4;
+            color: #ffffff;
             flex: 1;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -423,15 +429,22 @@
             text-align: center;
         }
         #peer-stats-section .peer-rtt {
-            color: #a6adc8;
+            color: #ffffff;
             min-width: 40px;
             text-align: right;
+        }
+        #peer-stats-section .peer-type-url {
+            color: #ffffff;
         }
         #peer-stats-section .type-direct { color: #a6e3a1; }
         #peer-stats-section .type-stun { color: #f9e2af; }
         #peer-stats-section .type-turn { color: #fab387; }
+        #peer-stats-section .type-host { color: #a6e3a1; }
+        #peer-stats-section .type-srflx { color: #f9e2af; }
+        #peer-stats-section .type-prflx { color: #89b4fa; }
+        #peer-stats-section .type-relay { color: #fab387; }
         #peer-stats-section .no-peers {
-            color: #6c7086;
+            color: #cdd6f4;
             font-style: italic;
             font-size: 11px;
         }

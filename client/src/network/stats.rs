@@ -8,15 +8,17 @@ use web_sys::RtcPeerConnection;
 
 use super::protocol::PeerId;
 
-/// Connection type based on ICE candidate type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Connection type based on ICE candidate type (RFC 8445).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionType {
-    /// Direct peer-to-peer connection (host candidate).
-    Direct,
-    /// Connection via STUN (server-reflexive or peer-reflexive).
-    Stun,
-    /// Connection via TURN relay.
-    Turn,
+    /// Host candidate - direct local connection.
+    Host,
+    /// Server-reflexive candidate - discovered via STUN server.
+    Srflx(String),
+    /// Peer-reflexive candidate - discovered during ICE checks.
+    Prflx(String),
+    /// Relay candidate - via TURN relay server.
+    Relay(String),
     /// Unknown/connecting.
     Unknown,
 }
@@ -75,7 +77,7 @@ pub async fn fetch_peer_stats(
         }
     });
 
-    // Second pass: find the local candidate to get the connection type
+    // Second pass: find the local candidate to get the connection type and TURN server URL
     if let Some(ref candidate_id) = local_candidate_id {
         stats_map.for_each(&mut |value, key| {
             if key.as_string().as_deref() == Some(candidate_id.as_str())
@@ -83,9 +85,37 @@ pub async fn fetch_peer_stats(
                 && let Some(type_str) = candidate_type.as_string()
             {
                 connection_type = match type_str.as_str() {
-                    "host" => ConnectionType::Direct,
-                    "srflx" | "prflx" => ConnectionType::Stun,
-                    "relay" => ConnectionType::Turn,
+                    "host" => ConnectionType::Host,
+                    "srflx" => {
+                        // Extract STUN server URL for server-reflexive candidates
+                        if let Ok(url) = js_sys::Reflect::get(&value, &"url".into())
+                            && let Some(url_str) = url.as_string()
+                        {
+                            ConnectionType::Srflx(url_str)
+                        } else {
+                            ConnectionType::Srflx("unknown".to_string())
+                        }
+                    }
+                    "prflx" => {
+                        // Extract STUN server URL for peer-reflexive candidates
+                        if let Ok(url) = js_sys::Reflect::get(&value, &"url".into())
+                            && let Some(url_str) = url.as_string()
+                        {
+                            ConnectionType::Prflx(url_str)
+                        } else {
+                            ConnectionType::Prflx("unknown".to_string())
+                        }
+                    }
+                    "relay" => {
+                        // Extract TURN server URL for relay candidates
+                        if let Ok(url) = js_sys::Reflect::get(&value, &"url".into())
+                            && let Some(url_str) = url.as_string()
+                        {
+                            ConnectionType::Relay(url_str)
+                        } else {
+                            ConnectionType::Relay("unknown".to_string())
+                        }
+                    }
                     _ => ConnectionType::Unknown,
                 };
             }
@@ -142,19 +172,55 @@ pub fn update_peer_stats_display(stats: &[PeerStats]) {
         };
         id_span.set_text_content(Some(&id_text));
 
-        // Connection type
-        let type_span = web_sys::window()
+        // Connection type name and server URL
+        let type_container = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.create_element("span").ok())
             .unwrap();
-        let (type_text, type_class) = match stat.connection_type {
-            ConnectionType::Direct => ("Direct", "peer-type type-direct"),
-            ConnectionType::Stun => ("STUN", "peer-type type-stun"),
-            ConnectionType::Turn => ("TURN", "peer-type type-turn"),
+        let _ = type_container.set_attribute("class", "peer-type-container");
+
+        // Type name span
+        let type_name_span = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.create_element("span").ok())
+            .unwrap();
+        let (type_name, type_class) = match &stat.connection_type {
+            ConnectionType::Host => ("host", "peer-type type-host"),
+            ConnectionType::Srflx(_) => ("srflx", "peer-type type-srflx"),
+            ConnectionType::Prflx(_) => ("prflx", "peer-type type-prflx"),
+            ConnectionType::Relay(_) => ("relay", "peer-type type-relay"),
             ConnectionType::Unknown => ("...", "peer-type"),
         };
-        let _ = type_span.set_attribute("class", type_class);
-        type_span.set_text_content(Some(type_text));
+        let _ = type_name_span.set_attribute("class", type_class);
+        type_name_span.set_text_content(Some(type_name));
+        let _ = type_container.append_child(&type_name_span);
+
+        // Server URL span (if applicable)
+        if let Some(display_url) = match &stat.connection_type {
+            ConnectionType::Host | ConnectionType::Unknown => None,
+            ConnectionType::Srflx(url) | ConnectionType::Prflx(url) => {
+                // Extract just the hostname:port from stun:hostname:port
+                url.strip_prefix("stun:")
+                    .or_else(|| url.strip_prefix("stuns:"))
+                    .and_then(|s| s.split('?').next())
+            }
+            ConnectionType::Relay(url) => {
+                // Extract just the hostname:port from turn:hostname:port?transport=udp
+                url.strip_prefix("turn:")
+                    .or_else(|| url.strip_prefix("turns:"))
+                    .and_then(|s| s.split('?').next())
+            }
+        } {
+            let url_span = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.create_element("span").ok())
+                .unwrap();
+            let _ = url_span.set_attribute("class", "peer-type-url");
+            url_span.set_text_content(Some(&format!(" ({})", display_url)));
+            let _ = type_container.append_child(&url_span);
+        }
+
+        let type_span = type_container;
 
         // RTT
         let rtt_span = web_sys::window()
