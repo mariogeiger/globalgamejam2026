@@ -15,7 +15,7 @@ echo "✅ Code formatting check passed"
 
 # Run clippy on client (wasm32)
 echo "Running clippy on client..."
-if ! cargo clippy -p globalgamejam2026 --target wasm32-unknown-unknown -- -D warnings; then
+if ! cargo clippy -p client --target wasm32-unknown-unknown -- -D warnings; then
     echo "❌ Clippy found issues in client"
     exit 1
 fi
