@@ -66,7 +66,8 @@ pub async fn run_turn_server(port: u16, public_ip: IpAddr) -> Result<(), Error> 
             TURN_PASSWORD,
             TURN_REALM,
         )),
-        channel_bind_timeout: Duration::from_secs(0),
+        // Channel bindings expire after 10 minutes (RFC 5766 recommends 10 min)
+        channel_bind_timeout: Duration::from_secs(600),
         alloc_close_notify: None,
     })
     .await?;

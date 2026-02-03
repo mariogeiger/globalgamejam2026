@@ -12,7 +12,11 @@ const GIT_HASH: &str = env!("GIT_HASH");
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Set log levels: info for most, but filter out noisy TURN "no allocation found" errors
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,turn::server=warn"),
+    )
+    .init();
 
     let public_ip = turn::get_public_ip();
 
