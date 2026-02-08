@@ -407,6 +407,7 @@ impl Renderer {
                 height: self.ctx.config.height,
                 mask_type: game.player.mask as u8,
                 time: game.time,
+                inv_view: view.inverse(),
             },
         );
 

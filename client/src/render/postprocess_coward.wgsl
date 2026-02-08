@@ -8,6 +8,7 @@
 @group(1) @binding(0) var<uniform> params: Params;
 
 struct Params {
+    inv_view: mat4x4<f32>,
     resolution: vec2<f32>,
     time: f32,
     _padding: f32,
@@ -39,48 +40,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let position = textureLoad(t_position, pixel_coord, 0);
     let velocity = textureLoad(t_velocity, pixel_coord, 0);
     
-    let view_pos = position.xyz;
-    let depth = max(position.w, 1.0); // Avoid division by zero
-    let vel = velocity.xyz;
-    
-    // Project 3D velocity to screen-space velocity
-    // For perspective projection: screen_pos = view_pos.xy / view_pos.z
-    // Derivative: screen_vel = (vel.xy * z - view_pos.xy * vel.z) / z²
-    // This gives us: lateral motion / depth - radial expansion from forward motion
-    let screen_vel = (vel.xy - view_pos.xy * vel.z / depth) / depth;
-    
-    // Convert to UV-space blur direction (flip Y for screen coords)
-    let blur_dir = vec2<f32>(screen_vel.x, -screen_vel.y);
-    
-    // Screen-space speed determines blur amount
-    let screen_speed = length(screen_vel);
-    let speed_factor = clamp(screen_speed / 2.0, 0.0, 1.0);
-    
-    // Directional motion blur: elongated kernel along velocity direction
-    // More samples for smoother blur, weighted by distance from center
-    let blur_length = speed_factor * 0.08;
-    let blur_axis = normalize(blur_dir + vec2<f32>(0.0001)); // Normalized direction
-    
     var blurred = vec4<f32>(0.0);
     var total_weight = 0.0;
     
     // Sample along the motion direction with gaussian-like weighting
-    for (var i = -7; i <= 7; i++) {
-        let t = f32(i) / 7.0; // -1 to 1
-        let weight = exp(-2.0 * t * t); // Gaussian falloff
-        let offset = blur_axis * blur_length * t;
+    const SAMPLES = 7;
+    for (var i = -SAMPLES; i <= SAMPLES; i++) {
+        let t = f32(i) / f32(SAMPLES); // -1 to 1
+        let weight = 1.;
+        let offset = velocity.xy*t;
         blurred += textureSample(t_scene, s_scene, in.uv + offset) * weight;
         total_weight += weight;
     }
     blurred /= total_weight;
-    
-    // Blend: full blur when moving fast, sharp when still
-    let color = mix(textureSample(t_scene, s_scene, in.uv), blurred, speed_factor);
-    
-    // Desaturate and brighten (coward's washed-out look)
-    let luminance = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let desaturated = mix(color.rgb, vec3<f32>(luminance), 0.4);
-    let brightened = desaturated * 1.1 + vec3<f32>(0.05);
-    
-    return vec4<f32>(brightened, color.a);
+
+    let col_lum = dot(blurred.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let col_desaturated = mix(blurred.rgb, vec3<f32>(col_lum), 0.4);
+    let col_brightened = col_desaturated * 1.1 + vec3<f32>(0.05);
+
+    return vec4(vec3(1.-exp(.5-5.*col_lum)),1.);
 }

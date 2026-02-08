@@ -1,6 +1,7 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
+    prev_view_proj: mat4x4<f32>,
     player_velocity: vec4<f32>,
 };
 
@@ -50,6 +51,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
     out.color = vec4<f32>(cone.color.rgb, alpha);
     out.position = vec4<f32>(in.view_pos, length(in.view_pos));
-    out.velocity = vec4<f32>(-camera.player_velocity.xyz, 0.0);
+    out.velocity = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     return out;
 }

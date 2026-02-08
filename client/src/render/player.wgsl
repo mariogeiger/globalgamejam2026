@@ -1,6 +1,7 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
+    prev_view_proj: mat4x4<f32>,
     player_velocity: vec4<f32>,
 };
 
@@ -32,6 +33,8 @@ struct VertexOutput {
     @location(0) tex_coord: vec2<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) view_pos: vec3<f32>,
+    @location(3) curr_pos: vec4<f32>,
+    @location(4) prev_pos: vec4<f32>,
 };
 
 struct FragmentOutput {
@@ -48,6 +51,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.tex_coord = in.tex_coord;
     out.world_normal = (player.model * vec4<f32>(in.normal, 0.0)).xyz;
     out.view_pos = (camera.view * world_pos).xyz;
+    out.curr_pos = camera.view_proj * world_pos;
+    // Approximate previous world position using object velocity
+    let prev_world_pos = world_pos - vec4<f32>(player.object_velocity.xyz, 0.0);
+    out.prev_pos = camera.prev_view_proj * prev_world_pos;
     return out;
 }
 
@@ -63,11 +70,14 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     
     let final_color = tex_color.rgb * player.color.rgb * brightness;
     
-    let relative_velocity = player.object_velocity.xyz - camera.player_velocity.xyz;
+    // Compute screen-space velocity from current and previous positions
+    let curr_ndc = in.curr_pos.xy / in.curr_pos.w;
+    let prev_ndc = in.prev_pos.xy / in.prev_pos.w;
+    let velocity = curr_ndc - prev_ndc;
     
     var out: FragmentOutput;
     out.color = vec4<f32>(final_color, tex_color.a * player.color.a);
     out.position = vec4<f32>(in.view_pos, length(in.view_pos));
-    out.velocity = vec4<f32>(relative_velocity, 0.0);
+    out.velocity = vec4<f32>(velocity, 0.0, 0.0);
     return out;
 }

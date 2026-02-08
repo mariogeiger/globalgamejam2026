@@ -8,6 +8,7 @@
 @group(1) @binding(0) var<uniform> params: Params;
 
 struct Params {
+    inv_view: mat4x4<f32>,
     resolution: vec2<f32>,
     time: f32,
     _padding: f32,
@@ -36,8 +37,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Use textureLoad for unfilterable float textures (Rgba32Float)
     let pixel_coord = vec2<i32>(in.uv * params.resolution);
     let position = textureLoad(t_position, pixel_coord, 0);
-
+    let view_pos = vec4<f32>(position.xyz, 1.0);
+    let world_position = params.inv_view * view_pos;
     let col = textureSample(t_scene, s_scene, in.uv);
-    return vec4(mix(col.xyz,cos(position.xyz+vec3(20.*params.time)),exp(.01*position.z)), 1.0);
-    
+    let c = cos((1./8.)*2*3.1415*world_position.xyz);
+    let d = 1. - c.x*c.y*c.z;
+    if(position.z < 0) {
+        return vec4(mix(col.xyz,vec3(d),d*exp(.002*position.z)), 1.0);
+    }
+    return col;
 }

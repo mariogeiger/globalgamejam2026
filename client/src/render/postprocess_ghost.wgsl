@@ -8,6 +8,7 @@
 @group(1) @binding(0) var<uniform> params: Params;
 
 struct Params {
+    inv_view: mat4x4<f32>,
     resolution: vec2<f32>,
     time: f32,
     _padding: f32,

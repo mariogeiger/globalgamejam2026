@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Mat4;
 
 use crate::gpu::{
     create_render_target_texture_with_label, create_uniform_buffer, create_vertex_buffer,
@@ -8,6 +9,7 @@ use crate::gpu::{
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct PostProcessUniform {
+    pub inv_view: [[f32; 4]; 4],
     pub resolution: [f32; 2],
     pub time: f32,
     pub _padding: f32,
@@ -18,6 +20,7 @@ pub struct PostProcessApplyParams {
     pub height: u32,
     pub mask_type: u8,
     pub time: f32,
+    pub inv_view: Mat4,
 }
 
 #[repr(C)]
@@ -187,6 +190,7 @@ impl PostProcessor {
             create_pipeline(include_str!("postprocess_hunter.wgsl"), "Hunter Pipeline");
 
         let uniform = PostProcessUniform {
+            inv_view: Mat4::IDENTITY.to_cols_array_2d(),
             resolution: [width as f32, height as f32],
             time: 0.0,
             _padding: 0.0,
@@ -332,6 +336,7 @@ impl PostProcessor {
             &self.uniform_buffer,
             0,
             bytemuck::cast_slice(&[PostProcessUniform {
+                inv_view: params.inv_view.to_cols_array_2d(),
                 resolution: [params.width as f32, params.height as f32],
                 time: params.time,
                 _padding: 0.0,
