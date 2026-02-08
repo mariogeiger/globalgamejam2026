@@ -257,13 +257,15 @@ impl NetworkClient {
         }
     }
 
-    /// Send a kill notification to all peers.
+    /// Send a kill notification to all peers **and** deliver it back to
+    /// ourselves so `handle_network_event` processes every kill uniformly.
     ///
     /// This is sent on the reliable channel to ensure delivery.
     pub fn send_kill(&self, victim_id: PeerId) {
         let msg = GameMessage::Kill { victim_id };
         if let Ok(json) = serde_json::to_string(&msg) {
-            self.session.broadcast(ChannelKind::Events, &json);
+            self.session
+                .broadcast_including_self(ChannelKind::Events, &json);
         }
     }
 

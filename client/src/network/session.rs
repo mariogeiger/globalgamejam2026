@@ -488,6 +488,21 @@ impl Session {
         }
     }
 
+    /// Send data to all connected peers **and** queue the same message as a
+    /// local `PeerMessage` event so `poll()` delivers it back to us through
+    /// the normal event pipeline. Use this for game events where the local
+    /// client must process the same side effects as remote clients.
+    pub fn broadcast_including_self(&self, channel: ChannelKind, data: &str) {
+        self.broadcast(channel, data);
+        if let Some(local_id) = self.local_id {
+            self.events.push(SessionEvent::PeerMessage {
+                from: local_id,
+                channel,
+                data: data.to_string(),
+            });
+        }
+    }
+
     /// Notify server that we died.
     pub fn notify_death(&self) {
         self.signaling.send_player_died();

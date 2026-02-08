@@ -10,9 +10,11 @@ use winit::{
 mod assets;
 mod audio;
 mod collision;
+mod combat;
 mod config;
 mod debug;
 mod game;
+mod game_ui;
 mod glb;
 mod gpu;
 mod input;
