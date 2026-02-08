@@ -14,23 +14,23 @@ fn doc() -> Option<web_sys::Document> {
 }
 
 fn set_visible(id: &str, visible: bool) {
-    if let Some(doc) = doc() {
-        if let Some(el) = doc.get_element_by_id(id) {
-            let display = if visible {
-                "display: block;"
-            } else {
-                "display: none;"
-            };
-            let _ = el.set_attribute("style", display);
-        }
+    if let Some(doc) = doc()
+        && let Some(el) = doc.get_element_by_id(id)
+    {
+        let display = if visible {
+            "display: block;"
+        } else {
+            "display: none;"
+        };
+        let _ = el.set_attribute("style", display);
     }
 }
 
 fn set_text(id: &str, text: &str) {
-    if let Some(doc) = doc() {
-        if let Some(el) = doc.get_element_by_id(id) {
-            el.set_text_content(Some(text));
-        }
+    if let Some(doc) = doc()
+        && let Some(el) = doc.get_element_by_id(id)
+    {
+        el.set_text_content(Some(text));
     }
 }
 
