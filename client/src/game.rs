@@ -81,6 +81,8 @@ pub struct GameState {
     pub local_kills: u32,
     /// Last time peer stats were updated
     last_stats_update: Instant,
+    /// Kill feed for the current round: (killer_name, victim_name)
+    kill_feed: Vec<(String, String)>,
 }
 
 impl GameState {
@@ -134,6 +136,7 @@ impl GameState {
             local_name: None,
             local_kills: 0,
             last_stats_update: Instant::now(),
+            kill_feed: Vec::new(),
         }
     }
 
@@ -608,6 +611,26 @@ impl GameState {
             } => {
                 log::info!("Player {} was killed by {}", victim_id, killer_id);
 
+                // Resolve names for the kill feed
+                let local_name = self.local_name.clone().unwrap_or_else(|| "You".to_string());
+                let killer_name = if local_peer_id == Some(killer_id) {
+                    local_name.clone()
+                } else {
+                    self.remote_players
+                        .get(&killer_id)
+                        .and_then(|p| p.name.clone())
+                        .unwrap_or_else(|| format!("Player {}", killer_id))
+                };
+                let victim_name = if local_peer_id == Some(victim_id) {
+                    local_name
+                } else {
+                    self.remote_players
+                        .get(&victim_id)
+                        .and_then(|p| p.name.clone())
+                        .unwrap_or_else(|| format!("Player {}", victim_id))
+                };
+                self.kill_feed.push((killer_name, victim_name));
+
                 // Increment killer's kill count
                 if let Some(killer) = self.remote_players.get_mut(&killer_id) {
                     killer.kills += 1;
@@ -677,6 +700,7 @@ impl GameState {
                     self.death_state = None;
                     self.winner_id = None;
                     self.pending_kills.clear();
+                    self.kill_feed.clear();
                     self.respawn_player();
 
                     // Reset all remote players
@@ -710,31 +734,37 @@ impl GameState {
                         .map(|(&id, _)| id);
                 }
 
-                let is_local_winner =
-                    self.winner_id == self.local_peer_id && self.local_peer_id.is_some();
+                let local_survived = !self.is_dead;
 
                 // Build scoreboard
                 let mut scores: Vec<(String, u32, bool, bool)> = Vec::new();
 
                 // Add local player
                 let local_name = self.local_name.clone().unwrap_or_else(|| "You".to_string());
-                let local_is_survivor = self.winner_id == self.local_peer_id;
-                scores.push((local_name, self.local_kills, true, local_is_survivor));
+                scores.push((local_name, self.local_kills, true, local_survived));
 
                 // Add remote players
+                let mut survivor_name: Option<String> = None;
                 for (&id, player) in &self.remote_players {
                     let name = player
                         .name
                         .clone()
                         .unwrap_or_else(|| format!("Player {}", id));
-                    let is_survivor = self.winner_id == Some(id);
+                    let is_survivor = player.is_alive;
+                    if is_survivor {
+                        survivor_name = Some(name.clone());
+                    }
                     scores.push((name, player.kills, false, is_survivor));
+                }
+                if local_survived {
+                    survivor_name =
+                        Some(self.local_name.clone().unwrap_or_else(|| "You".to_string()));
                 }
 
                 // Sort by kills descending
                 scores.sort_by(|a, b| b.1.cmp(&a.1));
 
-                show_victory_overlay(is_local_winner, scores);
+                show_victory_overlay(local_survived, survivor_name, scores, &self.kill_feed);
             }
             GamePhase::Spectating => {
                 // Joined mid-game, show spectating message
@@ -934,22 +964,51 @@ fn hide_waiting_overlay() {
     }
 }
 
-/// Show victory overlay with scoreboard
+/// Show end-of-round overlay with scoreboard and kill feed.
 /// scores: Vec of (name, kills, is_local, is_survivor)
-fn show_victory_overlay(is_local_winner: bool, scores: Vec<(String, u32, bool, bool)>) {
+/// kill_feed: Vec of (killer_name, victim_name) in chronological order
+fn show_victory_overlay(
+    local_survived: bool,
+    survivor_name: Option<String>,
+    scores: Vec<(String, u32, bool, bool)>,
+    kill_feed: &[(String, String)],
+) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
 
     if let Some(overlay) = doc.get_element_by_id("victory-overlay") {
-        let _ = overlay.set_attribute("style", "display: block;");
+        let border_color = if local_survived { "#a6e3a1" } else { "#f38ba8" };
+        let _ = overlay.set_attribute(
+            "style",
+            &format!("display: block; border-color: {};", border_color),
+        );
     }
     if let Some(title) = doc.get_element_by_id("victory-title") {
-        title.set_text_content(Some(if is_local_winner {
-            "VICTORY!"
+        let _ = title.set_attribute(
+            "style",
+            if local_survived {
+                "color: #a6e3a1;"
+            } else {
+                "color: #f38ba8;"
+            },
+        );
+        title.set_text_content(Some(if local_survived {
+            "YOU SURVIVED!"
         } else {
-            "DEFEATED"
+            "YOU DIED"
         }));
+    }
+    if let Some(subtitle) = doc.get_element_by_id("victory-subtitle") {
+        match &survivor_name {
+            Some(name) if !local_survived => {
+                subtitle.set_text_content(Some(&format!("{} survived", name)));
+                let _ = subtitle.set_attribute("style", "display: block;");
+            }
+            _ => {
+                let _ = subtitle.set_attribute("style", "display: none;");
+            }
+        }
     }
 
     // Build scoreboard HTML
@@ -970,6 +1029,22 @@ fn show_victory_overlay(is_local_winner: bool, scores: Vec<(String, u32, bool, b
             ));
         }
         scoreboard.set_inner_html(&html);
+    }
+
+    // Build kill feed HTML
+    if let Some(feed_el) = doc.get_element_by_id("kill-feed") {
+        if kill_feed.is_empty() {
+            feed_el.set_inner_html(r#"<div class="no-kills">No kills this round</div>"#);
+        } else {
+            let mut html = String::new();
+            for (killer, victim) in kill_feed {
+                html.push_str(&format!(
+                    r#"<div class="kill-entry"><span class="killer">{}</span> <span class="kill-arrow">→</span> <span class="victim">{}</span></div>"#,
+                    killer, victim
+                ));
+            }
+            feed_el.set_inner_html(&html);
+        }
     }
 }
 

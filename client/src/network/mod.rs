@@ -109,17 +109,24 @@ pub enum NetworkEvent {
 ///
 /// Provides a clean API for:
 /// - Broadcasting player state to all peers
-/// - Sending game events (kills)
+/// - Sending game events (kills, introductions)
 /// - Receiving events from peers and the server
 pub struct NetworkClient {
     session: Session,
+    player_name: String,
+    /// Counts down each frame; when it hits 0 we re-broadcast our introduction.
+    introduction_timer: u32,
 }
 
 impl NetworkClient {
     /// Create a new network client and connect to the signaling server.
     pub fn new(player_name: String) -> Result<Self, wasm_bindgen::JsValue> {
-        let session = Session::new(player_name)?;
-        Ok(Self { session })
+        let session = Session::new(player_name.clone())?;
+        Ok(Self {
+            session,
+            player_name,
+            introduction_timer: 0,
+        })
     }
 
     /// Poll for network events. Call this each frame.
@@ -131,10 +138,17 @@ impl NetworkClient {
         let session_events = self.session.poll();
 
         // Translate session events to network events
-        session_events
-            .into_iter()
-            .filter_map(|event| self.translate_event(event))
-            .collect()
+        let mut events = Vec::new();
+        for event in session_events {
+            // Re-broadcast our introduction when a new peer joins
+            if matches!(&event, SessionEvent::PeerJoined { .. }) {
+                self.introduction_timer = 0;
+            }
+            if let Some(net_event) = self.translate_event(event) {
+                events.push(net_event);
+            }
+        }
+        events
     }
 
     /// Translate a session event to a network event.
@@ -208,6 +222,28 @@ impl NetworkClient {
                     }
                 }
             }
+        }
+    }
+
+    /// Broadcast our player name introduction to all connected peers.
+    ///
+    /// Called each frame; internally throttles to re-send every ~2 seconds
+    /// (120 frames) so that newly-connected peers whose data channels were
+    /// not yet open will still receive it shortly after connecting.
+    pub fn send_introduction(&mut self) {
+        if !self.session.is_connected() {
+            return;
+        }
+        if self.introduction_timer == 0 {
+            let msg = GameMessage::Introduction {
+                name: self.player_name.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                self.session.broadcast(ChannelKind::Events, &json);
+            }
+            self.introduction_timer = 120;
+        } else {
+            self.introduction_timer -= 1;
         }
     }
 

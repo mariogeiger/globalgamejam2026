@@ -258,7 +258,7 @@ impl ApplicationHandler for App {
 
                         // --- Network send ---
                         state.debug.begin_section();
-                        if let Some(ref network) = state.network {
+                        if let Some(ref mut network) = state.network {
                             for victim_id in state.game.take_pending_kills() {
                                 network.send_kill(victim_id);
                             }
@@ -275,6 +275,8 @@ impl ApplicationHandler for App {
                                     state.game.player.mask as u8,
                                 );
                             }
+
+                            network.send_introduction();
 
                             state.game.update_peer_stats(network);
                         }
