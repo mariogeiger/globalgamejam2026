@@ -209,8 +209,14 @@
             font-size: 28px;
             font-weight: bold;
             letter-spacing: 4px;
-            margin-bottom: 15px;
+            margin-bottom: 4px;
             color: #a6e3a1;
+        }
+        #victory-subtitle {
+            font-size: 14px;
+            color: #cdd6f4;
+            margin-bottom: 12px;
+            display: none;
         }
         #victory-overlay .restart-hint {
             font-size: 12px;
@@ -236,6 +242,28 @@
         .score-row.local.survivor { color: #a6e3a1; }
         .score-row .name { flex: 1; }
         .score-row .kills { min-width: 30px; text-align: right; }
+
+        #kill-feed {
+            margin: 10px 0 0;
+            padding-top: 10px;
+            border-top: 1px solid rgba(205, 214, 244, 0.15);
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .kill-entry {
+            font-size: 12px;
+            padding: 3px 8px;
+            color: #a6adc8;
+        }
+        .kill-entry .killer { color: #f38ba8; font-weight: bold; }
+        .kill-entry .kill-arrow { color: #6c7086; margin: 0 4px; }
+        .kill-entry .victim { color: #cdd6f4; }
+        .no-kills {
+            font-size: 12px;
+            color: #6c7086;
+            font-style: italic;
+            padding: 3px 8px;
+        }
         
         #spectating-overlay {
             background: rgba(30, 30, 46, 0.95);
@@ -556,8 +584,10 @@
     </div>
     
     <div id="victory-overlay" class="game-status-box victory-box">
-        <h2 id="victory-title">VICTORY!</h2>
+        <h2 id="victory-title">ROUND OVER</h2>
+        <p id="victory-subtitle"></p>
         <div id="scoreboard"></div>
+        <div id="kill-feed"></div>
         <p class="restart-hint">Next round in <span id="victory-countdown">5</span>s</p>
     </div>
     
