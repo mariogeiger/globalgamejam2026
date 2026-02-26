@@ -1,0 +1,11 @@
+services:
+  game:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "3478:3478/udp"
+    environment:
+      RUST_LOG: info

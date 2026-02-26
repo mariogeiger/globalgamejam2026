@@ -7,30 +7,9 @@ on:
 
 jobs:
   deploy:
-    name: Build and Deploy
+    name: Deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install trunk
-        uses: jetli/trunk-action@v0.5.1
-
-      - name: Build client
-        run: trunk build --release
-        working-directory: client
-
-      - name: Build server
-        run: cargo build -p server --release
-
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.1
         with:
@@ -44,12 +23,11 @@ jobs:
           SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh $SSH_TARGET "mkdir -p $DEPLOY_PATH/client/dist"
-          scp -r client/dist/* $SSH_TARGET:$DEPLOY_PATH/client/dist/
-          scp target/release/server $SSH_TARGET:$DEPLOY_PATH/server
-          ssh $SSH_TARGET "sudo systemctl restart ggj-server"
+          ssh $SSH_TARGET "cd $DEPLOY_PATH && git pull && sudo docker compose -f deploy/docker-compose.yml up -d --build"
 
       - name: Verify deployment
+        env:
+          SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
-          sleep 3
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "systemctl is-active ggj-server"
+          sleep 5
+          ssh $SSH_TARGET "sudo docker compose -f ${{ secrets.DEPLOY_PATH }}/deploy/docker-compose.yml ps --format 'table {{.Name}}\t{{.Status}}'"
